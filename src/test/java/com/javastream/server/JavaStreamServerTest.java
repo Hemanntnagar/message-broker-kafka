@@ -12,7 +12,7 @@ class JavaStreamServerTest {
     @Test
     void startAndStopToggleRunningState() {
         JavaStreamConfig config = new JavaStreamConfig(
-                "test", 1, "127.0.0.1", 19092, "./data-test", false);
+                "test", 1, "127.0.0.1", 19092, "./data-test", false, 1);
         JavaStreamServer server = new JavaStreamServer(config, new NoOpBrokerNode(config));
 
         assertFalse(server.isRunning());
@@ -25,7 +25,7 @@ class JavaStreamServerTest {
     @Test
     void doubleStartIsIdempotent() {
         JavaStreamConfig config = new JavaStreamConfig(
-                "test", 1, "127.0.0.1", 19092, "./data-test", false);
+                "test", 1, "127.0.0.1", 19092, "./data-test", false, 1);
         JavaStreamServer server = new JavaStreamServer(config, new NoOpBrokerNode(config));
         server.start();
         server.start();

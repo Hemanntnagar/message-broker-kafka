@@ -15,7 +15,7 @@ public final class TcpBrokerNode implements BrokerNode {
     private final AtomicBoolean started = new AtomicBoolean(false);
 
     public TcpBrokerNode(JavaStreamConfig config) {
-        BrokerServices services = new BrokerServices();
+        BrokerServices services = new BrokerServices(config.defaultTopicPartitionCount());
         this.brokerServices = services;
         this.brokerServer = new BrokerServer(config, services);
     }

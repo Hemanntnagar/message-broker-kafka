@@ -80,7 +80,8 @@ public final class ConfigLoader {
                     props.getProperty("network.listen.host", "0.0.0.0"),
                     parseInt(props.getProperty("network.listen.port", "9092"), "network.listen.port"),
                     props.getProperty("storage.data.dir", "./data"),
-                    Boolean.parseBoolean(props.getProperty("cluster.enabled", "false")));
+                    Boolean.parseBoolean(props.getProperty("cluster.enabled", "false")),
+                    parseInt(props.getProperty("topic.default.partition.count", "1"), "topic.default.partition.count"));
         } catch (NumberFormatException e) {
             throw new ConfigurationException("Invalid numeric configuration value", e);
         }

@@ -41,7 +41,7 @@ public final class BrokerServer {
     private Thread acceptorThread;
 
     public BrokerServer(JavaStreamConfig config) {
-        this(config, new BrokerServices());
+        this(config, new BrokerServices(config.defaultTopicPartitionCount()));
     }
 
     public BrokerServer(JavaStreamConfig config, BrokerServices brokerServices) {

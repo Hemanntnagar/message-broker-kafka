@@ -54,6 +54,10 @@ public final class InMemoryMessageStore implements MessageStore {
         logs.computeIfAbsent(partition, ignored -> new PartitionLog());
     }
 
+    public void removePartition(PartitionId partition) {
+        logs.remove(partition);
+    }
+
     public record AppendResult(long messageId, long offset) {}
 
     public record StoredRecord(

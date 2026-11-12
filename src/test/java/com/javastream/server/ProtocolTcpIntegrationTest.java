@@ -68,7 +68,7 @@ class ProtocolTcpIntegrationTest {
                                     new Request(ProtocolConstants.VERSION_1, 1, OperationCode.PING, new byte[0])),
                             encoder.encodeRequest(
                                     new Request(
-                                            ProtocolConstants.VERSION_1, 2, OperationCode.GET_METADATA, new byte[0])));
+                                            ProtocolConstants.VERSION_1, 2, OperationCode.LIST_TOPICS, new byte[0])));
             out.write(batch);
             out.flush();
 

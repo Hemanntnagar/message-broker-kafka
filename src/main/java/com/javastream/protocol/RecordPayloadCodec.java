@@ -43,6 +43,14 @@ public final class RecordPayloadCodec {
 
     public record CreateTopicRequest(String topic, int partitionCount) {}
 
+    public record ListTopicsResponse(List<TopicEntry> topics) {}
+
+    public record TopicEntry(String name, int partitionCount) {}
+
+    public record GetMetadataRequest(String topic) {}
+
+    public record DeleteTopicRequest(String topic) {}
+
     public static byte[] encodeProduceRequest(ProduceRequest request) {
         byte[] topicBytes = utf8(request.topic());
         ByteBuffer buffer =
@@ -168,6 +176,104 @@ public final class RecordPayloadCodec {
         int partitionCount = buffer.getInt();
         ensureConsumed(buffer);
         return new CreateTopicRequest(topic, partitionCount);
+    }
+
+    public static byte[] encodeListTopicsResponse(ListTopicsResponse response) {
+        int size = 4;
+        for (TopicEntry entry : response.topics()) {
+            byte[] nameBytes = utf8(entry.name());
+            size += 2 + nameBytes.length + 4;
+        }
+        ByteBuffer buffer = ByteBuffer.allocate(size).order(ByteOrder.BIG_ENDIAN);
+        buffer.putInt(response.topics().size());
+        for (TopicEntry entry : response.topics()) {
+            byte[] nameBytes = utf8(entry.name());
+            buffer.putShort((short) nameBytes.length);
+            buffer.put(nameBytes);
+            buffer.putInt(entry.partitionCount());
+        }
+        return toByteArray(buffer);
+    }
+
+    public static ListTopicsResponse decodeListTopicsResponse(byte[] payload) {
+        ByteBuffer buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN);
+        int count = buffer.getInt();
+        if (count < 0) {
+            throw new ProtocolDecodeException("Negative topic count: " + count);
+        }
+        List<TopicEntry> topics = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            String name = readUtf8Topic(buffer);
+            int partitionCount = buffer.getInt();
+            topics.add(new TopicEntry(name, partitionCount));
+        }
+        ensureConsumed(buffer);
+        return new ListTopicsResponse(List.copyOf(topics));
+    }
+
+    public static byte[] encodeGetMetadataRequest(GetMetadataRequest request) {
+        byte[] topicBytes = utf8(request.topic());
+        ByteBuffer buffer = ByteBuffer.allocate(2 + topicBytes.length).order(ByteOrder.BIG_ENDIAN);
+        buffer.putShort((short) topicBytes.length);
+        buffer.put(topicBytes);
+        return toByteArray(buffer);
+    }
+
+    public static GetMetadataRequest decodeGetMetadataRequest(byte[] payload) {
+        ByteBuffer buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN);
+        String topic = readUtf8Topic(buffer);
+        ensureConsumed(buffer);
+        return new GetMetadataRequest(topic);
+    }
+
+    public static byte[] encodeGetMetadataResponse(com.javastream.topic.TopicMetadata metadata) {
+        int size = 2 + utf8(metadata.topicName()).length + 4 + 4;
+        for (var partition : metadata.partitions()) {
+            size += 4 + 8 + 8;
+        }
+        ByteBuffer buffer = ByteBuffer.allocate(size).order(ByteOrder.BIG_ENDIAN);
+        byte[] topicBytes = utf8(metadata.topicName());
+        buffer.putShort((short) topicBytes.length);
+        buffer.put(topicBytes);
+        buffer.putInt(metadata.partitionCount());
+        buffer.putInt(metadata.partitions().size());
+        for (var partition : metadata.partitions()) {
+            buffer.putInt(partition.partitionIndex());
+            buffer.putLong(partition.logEndOffset());
+            buffer.putLong(partition.recordCount());
+        }
+        return toByteArray(buffer);
+    }
+
+    public static com.javastream.topic.TopicMetadata decodeGetMetadataResponse(byte[] payload) {
+        ByteBuffer buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN);
+        String topic = readUtf8Topic(buffer);
+        int partitionCount = buffer.getInt();
+        int listed = buffer.getInt();
+        List<com.javastream.partition.PartitionMetadata> partitions = new ArrayList<>(listed);
+        for (int i = 0; i < listed; i++) {
+            int index = buffer.getInt();
+            long logEnd = buffer.getLong();
+            long records = buffer.getLong();
+            partitions.add(new com.javastream.partition.PartitionMetadata(index, logEnd, records));
+        }
+        ensureConsumed(buffer);
+        return new com.javastream.topic.TopicMetadata(topic, partitionCount, partitions);
+    }
+
+    public static byte[] encodeDeleteTopicRequest(DeleteTopicRequest request) {
+        byte[] topicBytes = utf8(request.topic());
+        ByteBuffer buffer = ByteBuffer.allocate(2 + topicBytes.length).order(ByteOrder.BIG_ENDIAN);
+        buffer.putShort((short) topicBytes.length);
+        buffer.put(topicBytes);
+        return toByteArray(buffer);
+    }
+
+    public static DeleteTopicRequest decodeDeleteTopicRequest(byte[] payload) {
+        ByteBuffer buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN);
+        String topic = readUtf8Topic(buffer);
+        ensureConsumed(buffer);
+        return new DeleteTopicRequest(topic);
     }
 
     private static int recordSize(FetchedRecord record) {

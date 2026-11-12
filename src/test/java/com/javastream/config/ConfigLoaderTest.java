@@ -21,6 +21,7 @@ class ConfigLoaderTest {
         assertEquals(9092, config.listenPort());
         assertEquals("./data", config.dataDirectory());
         assertFalse(config.clusterEnabled());
+        assertEquals(1, config.defaultTopicPartitionCount());
     }
 
     @Test

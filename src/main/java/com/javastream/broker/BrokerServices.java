@@ -1,26 +1,43 @@
 package com.javastream.broker;
 
 import com.javastream.partition.PartitionId;
+import com.javastream.partition.PartitionMetadataStore;
 import com.javastream.storage.InMemoryMessageStore;
-import com.javastream.topic.InMemoryTopicRegistry;
+import com.javastream.topic.TopicManager;
+import com.javastream.topic.TopicMetadata;
 import com.javastream.topic.TopicName;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Single-node broker backing services (topics, partition logs, consumer commits).
  */
 public final class BrokerServices {
 
-    private final InMemoryTopicRegistry topicRegistry = new InMemoryTopicRegistry();
-    private final InMemoryMessageStore messageStore = new InMemoryMessageStore();
+    private final TopicManager topicManager;
+    private final InMemoryMessageStore messageStore;
     private final ConcurrentHashMap<PartitionId, Long> committedOffsets = new ConcurrentHashMap<>();
-    private final AtomicInteger roundRobinPartition = new AtomicInteger();
+    private final ConcurrentHashMap<PartitionId, Object> partitionLocks = new ConcurrentHashMap<>();
 
-    public InMemoryTopicRegistry topicRegistry() {
-        return topicRegistry;
+    public BrokerServices() {
+        this(TopicManager.DEFAULT_PARTITION_COUNT);
+    }
+
+    public BrokerServices(int defaultPartitionCount) {
+        this.messageStore = new InMemoryMessageStore();
+        this.topicManager =
+                new TopicManager(defaultPartitionCount, new PartitionMetadataStore(), messageStore);
+    }
+
+    BrokerServices(TopicManager topicManager, InMemoryMessageStore messageStore) {
+        this.topicManager = topicManager;
+        this.messageStore = messageStore;
+    }
+
+    public TopicManager topicManager() {
+        return topicManager;
     }
 
     public InMemoryMessageStore messageStore() {
@@ -28,26 +45,27 @@ public final class BrokerServices {
     }
 
     public void registerTopic(TopicName name, int partitionCount) {
-        topicRegistry.register(name, partitionCount);
-        for (int i = 0; i < partitionCount; i++) {
-            messageStore.ensurePartition(new PartitionId(name, i));
-        }
+        topicManager.createTopic(name, partitionCount);
     }
 
     public Optional<Integer> partitionCount(TopicName name) {
-        return topicRegistry.partitionCount(name);
+        return topicManager.partitionCount(name);
     }
 
     public int resolvePartition(TopicName topic, int partitionHint, byte[] key) {
-        int partitions =
-                topicRegistry.partitionCount(topic).orElseThrow(() -> new IllegalStateException("Unknown topic"));
-        if (partitionHint >= 0 && partitionHint < partitions) {
-            return partitionHint;
-        }
-        if (key != null && key.length > 0) {
-            return Math.floorMod(hashKey(key), partitions);
-        }
-        return Math.floorMod(roundRobinPartition.getAndIncrement(), partitions);
+        return topicManager.resolvePartition(topic, partitionHint, key);
+    }
+
+    public List<String> listTopics() {
+        return topicManager.listTopics();
+    }
+
+    public Optional<TopicMetadata> topicMetadata(TopicName name) {
+        return topicManager.getTopicMetadata(name);
+    }
+
+    public void deleteTopic(TopicName name) {
+        topicManager.deleteTopic(name);
     }
 
     public void acknowledge(TopicName topic, int partition, long offset) {
@@ -59,11 +77,21 @@ public final class BrokerServices {
         return committedOffsets.getOrDefault(partition, -1L);
     }
 
-    private static int hashKey(byte[] key) {
-        int hash = 0;
-        for (byte b : key) {
-            hash = 31 * hash + b;
+    public InMemoryMessageStore.AppendResult appendRecord(
+            PartitionId partitionId,
+            byte[] key,
+            byte[] value,
+            java.util.Map<String, byte[]> headers,
+            long timestampEpochMillis) {
+        synchronized (partitionLock(partitionId)) {
+            InMemoryMessageStore.AppendResult result =
+                    messageStore.appendRecord(partitionId, key, value, headers, timestampEpochMillis);
+            topicManager.recordAppend(partitionId, result.offset());
+            return result;
         }
-        return hash;
+    }
+
+    private Object partitionLock(PartitionId partitionId) {
+        return partitionLocks.computeIfAbsent(partitionId, ignored -> new Object());
     }
 }

@@ -10,12 +10,14 @@ import com.javastream.protocol.Response;
 import com.javastream.protocol.StatusCode;
 import com.javastream.storage.InMemoryMessageStore;
 import com.javastream.storage.InMemoryMessageStore.StoredRecord;
+import com.javastream.topic.TopicMetadata;
 import com.javastream.topic.TopicName;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 /** Handles produce/fetch/topic operations for connected TCP clients. */
 public final class BrokerRequestDispatcher {
@@ -36,8 +38,9 @@ public final class BrokerRequestDispatcher {
                 case PRODUCE -> handleProduce(request);
                 case FETCH -> handleFetch(request);
                 case CONSUMER_ACK -> handleAck(request);
-                case LIST_TOPICS, GET_METADATA ->
-                        Response.ok(request.correlationId(), new byte[0]);
+                case LIST_TOPICS -> handleListTopics(request);
+                case GET_METADATA -> handleGetMetadata(request);
+                case DELETE_TOPIC -> handleDeleteTopic(request);
                 default ->
                         new Response(
                                 ProtocolConstants.VERSION_1,
@@ -49,6 +52,10 @@ public final class BrokerRequestDispatcher {
             log.debug("Malformed request payload: {}", e.getMessage());
             return new Response(
                     ProtocolConstants.VERSION_1, request.correlationId(), StatusCode.MALFORMED, new byte[0]);
+        } catch (com.javastream.exception.JavaStreamException e) {
+            log.debug("Bad request: {}", e.getMessage());
+            return new Response(
+                    ProtocolConstants.VERSION_1, request.correlationId(), StatusCode.BAD_REQUEST, new byte[0]);
         } catch (IllegalArgumentException | IllegalStateException e) {
             log.debug("Bad request: {}", e.getMessage());
             return new Response(
@@ -58,12 +65,51 @@ public final class BrokerRequestDispatcher {
 
     private Response handleCreateTopic(Request request) {
         RecordPayloadCodec.CreateTopicRequest create = RecordPayloadCodec.decodeCreateTopicRequest(request.payload());
-        TopicName topic = new TopicName(create.topic());
+        String validated = com.javastream.topic.TopicNameValidator.validate(create.topic());
+        TopicName topic = new TopicName(validated);
         if (services.partitionCount(topic).isPresent()) {
             return new Response(
                     ProtocolConstants.VERSION_1, request.correlationId(), StatusCode.BAD_REQUEST, new byte[0]);
         }
+        if (create.partitionCount() <= 0) {
+            return new Response(
+                    ProtocolConstants.VERSION_1, request.correlationId(), StatusCode.BAD_REQUEST, new byte[0]);
+        }
         services.registerTopic(topic, create.partitionCount());
+        return Response.ok(request.correlationId(), new byte[0]);
+    }
+
+    private Response handleListTopics(Request request) {
+        List<RecordPayloadCodec.TopicEntry> entries = new ArrayList<>();
+        for (String name : services.listTopics()) {
+            TopicName topic = new TopicName(name);
+            int count = services.partitionCount(topic).orElse(0);
+            entries.add(new RecordPayloadCodec.TopicEntry(name, count));
+        }
+        RecordPayloadCodec.ListTopicsResponse list = new RecordPayloadCodec.ListTopicsResponse(entries);
+        return Response.ok(request.correlationId(), RecordPayloadCodec.encodeListTopicsResponse(list));
+    }
+
+    private Response handleGetMetadata(Request request) {
+        RecordPayloadCodec.GetMetadataRequest meta = RecordPayloadCodec.decodeGetMetadataRequest(request.payload());
+        TopicName topic = new TopicName(meta.topic());
+        Optional<TopicMetadata> metadata = services.topicMetadata(topic);
+        if (metadata.isEmpty()) {
+            return new Response(
+                    ProtocolConstants.VERSION_1, request.correlationId(), StatusCode.NOT_FOUND, new byte[0]);
+        }
+        return Response.ok(
+                request.correlationId(), RecordPayloadCodec.encodeGetMetadataResponse(metadata.get()));
+    }
+
+    private Response handleDeleteTopic(Request request) {
+        RecordPayloadCodec.DeleteTopicRequest delete = RecordPayloadCodec.decodeDeleteTopicRequest(request.payload());
+        TopicName topic = new TopicName(delete.topic());
+        if (services.partitionCount(topic).isEmpty()) {
+            return new Response(
+                    ProtocolConstants.VERSION_1, request.correlationId(), StatusCode.NOT_FOUND, new byte[0]);
+        }
+        services.deleteTopic(topic);
         return Response.ok(request.correlationId(), new byte[0]);
     }
 
@@ -77,13 +123,12 @@ public final class BrokerRequestDispatcher {
         int partition = services.resolvePartition(topic, produce.partitionHint(), produce.key());
         PartitionId partitionId = new PartitionId(topic, partition);
         InMemoryMessageStore.AppendResult append =
-                services.messageStore()
-                        .appendRecord(
-                                partitionId,
-                                produce.key(),
-                                produce.value(),
-                                produce.headers(),
-                                System.currentTimeMillis());
+                services.appendRecord(
+                        partitionId,
+                        produce.key(),
+                        produce.value(),
+                        produce.headers(),
+                        System.currentTimeMillis());
         RecordPayloadCodec.ProduceResponse ack =
                 new RecordPayloadCodec.ProduceResponse(append.messageId(), partition, append.offset());
         return Response.ok(request.correlationId(), RecordPayloadCodec.encodeProduceResponse(ack));
