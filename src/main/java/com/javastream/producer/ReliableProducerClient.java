@@ -8,6 +8,7 @@ import com.javastream.protocol.RecordPayloadCodec;
 import com.javastream.protocol.RecordPayloadCodec.ProduceRequest;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -102,14 +103,15 @@ public final class ReliableProducerClient implements AutoCloseable {
                                 settings.ackLevel(),
                                 Math.toIntExact(settings.requestTimeout().toMillis()),
                                 producerId,
-                                sequence);
+                                sequence,
+                                List.of());
                 var response =
                         connection.send(
                                 OperationCode.PRODUCE,
                                 RecordPayloadCodec.encodeProduceRequest(request),
                                 settings.requestTimeout());
                 RecordPayloadCodec.ProduceResponse ack =
-                        RecordPayloadCodec.decodeProduceResponse(response.payload());
+                        RecordPayloadCodec.decodeProduceResponse(response.payload()).responses().getFirst();
                 if (topicSequence != null) {
                     topicSequence.markCommitted(sequence);
                 }

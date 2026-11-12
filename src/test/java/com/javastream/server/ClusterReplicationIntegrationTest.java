@@ -148,7 +148,8 @@ class ClusterReplicationIntegrationTest {
                             ProducerAckLevel.ACK_ALL_REPLICAS,
                             5_000,
                             -1,
-                            0);
+                            0,
+                            List.of());
             Response response =
                     connection.send(
                             OperationCode.PRODUCE,

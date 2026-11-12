@@ -7,6 +7,7 @@ import com.javastream.protocol.RecordPayloadCodec.ProduceRequest;
 import com.javastream.client.TcpProtocolConnection;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -48,8 +49,47 @@ public final class ProducerClient implements AutoCloseable {
         ensureConnected();
         ProduceRequest request = new ProduceRequest(topic, partitionHint, key, value, headers);
         var response = connection.send(OperationCode.PRODUCE, RecordPayloadCodec.encodeProduceRequest(request));
-        RecordPayloadCodec.ProduceResponse ack = RecordPayloadCodec.decodeProduceResponse(response.payload());
+        RecordPayloadCodec.ProduceResponse ack =
+                RecordPayloadCodec.decodeProduceResponse(response.payload()).responses().getFirst();
         return new PublishAcknowledgement(ack.messageId(), topic, ack.partition(), ack.offset());
+    }
+
+    /**
+     * Publishes multiple records in one round trip when {@code records.size() > 1}; otherwise delegates to
+     * {@link #publish(String, int, byte[], byte[], Map)}.
+     */
+    public List<PublishAcknowledgement> publishBatch(
+            String topic, int partitionHint, List<RecordPayloadCodec.ProduceRecord> records) throws IOException {
+        if (records == null || records.isEmpty()) {
+            throw new IllegalArgumentException("records must not be empty");
+        }
+        if (records.size() == 1) {
+            RecordPayloadCodec.ProduceRecord only = records.getFirst();
+            return List.of(
+                    publish(topic, partitionHint, only.key(), only.value(), only.headers()));
+        }
+        ensureConnected();
+        RecordPayloadCodec.ProduceRecord head = records.getFirst();
+        List<RecordPayloadCodec.ProduceRecord> tail = List.copyOf(records.subList(1, records.size()));
+        ProduceRequest request =
+                new ProduceRequest(
+                        topic,
+                        partitionHint,
+                        head.key(),
+                        head.value(),
+                        head.headers(),
+                        com.javastream.delivery.ProducerAckLevel.ACK_LEADER,
+                        0,
+                        -1,
+                        0,
+                        tail);
+        var response = connection.send(OperationCode.PRODUCE, RecordPayloadCodec.encodeProduceRequest(request));
+        List<PublishAcknowledgement> acks = new java.util.ArrayList<>();
+        for (RecordPayloadCodec.ProduceResponse item :
+                RecordPayloadCodec.decodeProduceResponse(response.payload()).responses()) {
+            acks.add(new PublishAcknowledgement(item.messageId(), topic, item.partition(), item.offset()));
+        }
+        return List.copyOf(acks);
     }
 
     public void createTopic(String topic, int partitionCount) throws IOException {

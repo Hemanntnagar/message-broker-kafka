@@ -132,53 +132,57 @@ public final class BrokerRequestDispatcher {
             return new Response(
                     ProtocolConstants.VERSION_1, request.correlationId(), StatusCode.NOT_FOUND, new byte[0]);
         }
-        int partition = services.resolvePartition(topic, produce.partitionHint(), produce.key());
-        PartitionId partitionId = new PartitionId(topic, partition);
-        if (services.leadership().isPresent()
-                && !services.leadership().get().isLocalLeader(partitionId, services.brokerId())) {
-            return new Response(
-                    ProtocolConstants.VERSION_1, request.correlationId(), StatusCode.BAD_REQUEST, new byte[0]);
+        List<RecordPayloadCodec.ProduceRecord> records = produce.allRecords();
+        List<RecordPayloadCodec.ProduceResponse> responses = new ArrayList<>(records.size());
+        long sequence = produce.sequenceNumber();
+        for (RecordPayloadCodec.ProduceRecord record : records) {
+            int partition = services.resolvePartition(topic, produce.partitionHint(), record.key());
+            PartitionId partitionId = new PartitionId(topic, partition);
+            if (services.leadership().isPresent()
+                    && !services.leadership().get().isLocalLeader(partitionId, services.brokerId())) {
+                return new Response(
+                        ProtocolConstants.VERSION_1, request.correlationId(), StatusCode.BAD_REQUEST, new byte[0]);
+            }
+            ProducerIdempotencyCache idempotency = services.producerIdempotencyCache();
+            var duplicate = idempotency.beginIdempotentAppend(produce.producerId(), partitionId, sequence);
+            if (duplicate.isPresent()) {
+                ProducerIdempotencyCache.DedupResult cached = duplicate.get();
+                responses.add(
+                        new RecordPayloadCodec.ProduceResponse(cached.messageId(), cached.partition(), cached.offset()));
+                sequence++;
+                continue;
+            }
+            BrokerMessageStore.AppendResult append =
+                    services.appendRecord(
+                            partitionId,
+                            record.key(),
+                            record.value(),
+                            record.headers(),
+                            System.currentTimeMillis());
+            idempotency.recordSuccessfulAppend(
+                    produce.producerId(), partitionId, sequence, append.messageId(), append.offset());
+            services
+                    .replicationEngine()
+                    .ifPresent(
+                            engine ->
+                                    engine.replicateAfterLeaderAppend(
+                                            partitionId,
+                                            append.messageId(),
+                                            append.offset(),
+                                            record.key(),
+                                            record.value(),
+                                            record.headers(),
+                                            System.currentTimeMillis()));
+            services
+                    .produceAcknowledgementService()
+                    .awaitAcknowledgement(
+                            produce.ackLevel(), services.messageStore(), partitionId, append.offset());
+            responses.add(new RecordPayloadCodec.ProduceResponse(append.messageId(), partition, append.offset()));
+            sequence++;
         }
-        ProducerIdempotencyCache idempotency = services.producerIdempotencyCache();
-        var duplicate =
-                idempotency.beginIdempotentAppend(produce.producerId(), partitionId, produce.sequenceNumber());
-        RecordPayloadCodec.ProduceResponse ack;
-        if (duplicate.isPresent()) {
-            ProducerIdempotencyCache.DedupResult cached = duplicate.get();
-            ack = new RecordPayloadCodec.ProduceResponse(cached.messageId(), cached.partition(), cached.offset());
-            return Response.ok(request.correlationId(), RecordPayloadCodec.encodeProduceResponse(ack));
-        }
-        BrokerMessageStore.AppendResult append =
-                services.appendRecord(
-                        partitionId,
-                        produce.key(),
-                        produce.value(),
-                        produce.headers(),
-                        System.currentTimeMillis());
-        idempotency.recordSuccessfulAppend(
-                produce.producerId(),
-                partitionId,
-                produce.sequenceNumber(),
-                append.messageId(),
-                append.offset());
-        services
-                .replicationEngine()
-                .ifPresent(
-                        engine ->
-                                engine.replicateAfterLeaderAppend(
-                                        partitionId,
-                                        append.messageId(),
-                                        append.offset(),
-                                        produce.key(),
-                                        produce.value(),
-                                        produce.headers(),
-                                        System.currentTimeMillis()));
-        services
-                .produceAcknowledgementService()
-                .awaitAcknowledgement(
-                        produce.ackLevel(), services.messageStore(), partitionId, append.offset());
-        ack = new RecordPayloadCodec.ProduceResponse(append.messageId(), partition, append.offset());
-        return Response.ok(request.correlationId(), RecordPayloadCodec.encodeProduceResponse(ack));
+        return Response.ok(
+                request.correlationId(),
+                RecordPayloadCodec.encodeProduceBatchResponse(new RecordPayloadCodec.ProduceBatchResponse(responses)));
     }
 
     private Response handleFetch(Request request) {

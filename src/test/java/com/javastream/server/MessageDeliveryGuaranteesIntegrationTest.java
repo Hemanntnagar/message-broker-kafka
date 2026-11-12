@@ -112,12 +112,13 @@ class MessageDeliveryGuaranteesIntegrationTest {
                             ProducerAckLevel.ACK_LEADER,
                             5_000,
                             99L,
-                            0);
+                            0,
+                            List.of());
             byte[] payload = RecordPayloadCodec.encodeProduceRequest(request);
             var first = connection.send(OperationCode.PRODUCE, payload);
             var second = connection.send(OperationCode.PRODUCE, payload);
-            var ack1 = RecordPayloadCodec.decodeProduceResponse(first.payload());
-            var ack2 = RecordPayloadCodec.decodeProduceResponse(second.payload());
+            var ack1 = RecordPayloadCodec.decodeProduceResponse(first.payload()).responses().getFirst();
+            var ack2 = RecordPayloadCodec.decodeProduceResponse(second.payload()).responses().getFirst();
             assertEquals(ack1.messageId(), ack2.messageId());
             assertEquals(ack1.offset(), ack2.offset());
         }

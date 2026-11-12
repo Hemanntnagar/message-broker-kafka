@@ -82,6 +82,17 @@ public final class BrokerServer {
         return dispatcher;
     }
 
+    /** Starts a broker with explicit backing services (load tests and integration harnesses). */
+    public static BrokerServer forLoadTest(String listenHost, int listenPort, BrokerServices brokerServices) {
+        return new BrokerServer(
+                listenHost,
+                listenPort,
+                DEFAULT_SOCKET_TIMEOUT_MS,
+                DEFAULT_MAX_REQUEST_BYTES,
+                256,
+                new BrokerRequestDispatcher(brokerServices));
+    }
+
     public String listenHost() {
         return listenHost;
     }

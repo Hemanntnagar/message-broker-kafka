@@ -76,7 +76,14 @@ Header size for both directions: **16 bytes**.
 | Producer ID | `int64` (`-1` = not idempotent) |
 | Sequence | `int64` (per producer, topic, partition; starts at `0`) |
 
-**OK response payload:** `uint64` messageId, `int32` partition, `int64` offset (20 bytes total).
+**Batch extension** (optional — more records in one `PRODUCE` round trip):
+
+| Field | Type |
+|-------|------|
+| Additional record count | `int32` (≥ 0) |
+| Additional records | repeated key, value, headers (same encoding as the first record) |
+
+**OK response payload:** single record — `uint64` messageId, `int32` partition, `int64` offset (20 bytes). Batch — `int32` count, then count × (messageId, partition, offset).
 
 ### `FETCH` (5)
 

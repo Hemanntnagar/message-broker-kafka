@@ -21,6 +21,7 @@ public final class LogSegment implements AutoCloseable {
 
     private long recordsInSegment;
     private long logEndPosition;
+    private final ByteBuffer recordHeaderScratch = ByteBuffer.allocate(LogRecordFormat.HEADER_SIZE);
 
     public LogSegment(
             int baseOffset,
@@ -106,15 +107,14 @@ public final class LogSegment implements AutoCloseable {
         long filePos = index.lookupPosition(startOffset);
         List<LogMessage> out = new ArrayList<>(maxMessages);
         long nextExpected = startOffset;
-        ByteBuffer lengthBuf = ByteBuffer.allocate(LogRecordFormat.HEADER_SIZE);
         while (out.size() < maxMessages && nextExpected < knownEndOffset) {
-            lengthBuf.clear();
-            int read = logChannel.read(lengthBuf, filePos);
+            recordHeaderScratch.clear();
+            int read = logChannel.read(recordHeaderScratch, filePos);
             if (read < LogRecordFormat.HEADER_SIZE) {
                 break;
             }
-            lengthBuf.flip();
-            int bodySize = lengthBuf.getInt();
+            recordHeaderScratch.flip();
+            int bodySize = recordHeaderScratch.getInt();
             if (bodySize <= 0) {
                 break;
             }

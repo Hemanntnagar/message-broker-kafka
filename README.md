@@ -81,6 +81,10 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for layering and design rules.
 
 SLF4J with Logback: `src/main/resources/logback.xml` (console + rolling file under `logs/`).
 
+## Performance benchmarks (Phase 10)
+
+See [PERFORMANCE.md](PERFORMANCE.md) for JMH microbenchmarks and the end-to-end load generator. Measured results are written to `BENCHMARK_REPORT.md` when you run `com.javastream.benchmark.BenchmarkCli`.
+
 ## License
 
 TBD.

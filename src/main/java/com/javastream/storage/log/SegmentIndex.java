@@ -17,6 +17,7 @@ public final class SegmentIndex implements AutoCloseable {
     private final FileChannel channel;
     private final List<IndexEntry> entries = new ArrayList<>();
     private final int indexStrideRecords;
+    private final ByteBuffer indexWriteBuffer = ByteBuffer.allocate(ENTRY_BYTES);
 
     public record IndexEntry(long offset, long position) {}
 
@@ -63,12 +64,12 @@ public final class SegmentIndex implements AutoCloseable {
         if (!entries.isEmpty() && entries.getLast().offset() == offset) {
             return;
         }
-        ByteBuffer buffer = ByteBuffer.allocate(ENTRY_BYTES);
-        buffer.putLong(offset);
-        buffer.putLong(logPosition);
-        buffer.flip();
+        indexWriteBuffer.clear();
+        indexWriteBuffer.putLong(offset);
+        indexWriteBuffer.putLong(logPosition);
+        indexWriteBuffer.flip();
         channel.position(channel.size());
-        channel.write(buffer);
+        channel.write(indexWriteBuffer);
         entries.add(new IndexEntry(offset, logPosition));
     }
 
@@ -76,14 +77,20 @@ public final class SegmentIndex implements AutoCloseable {
         if (entries.isEmpty()) {
             return 0L;
         }
-        long position = 0L;
-        for (IndexEntry entry : entries) {
-            if (entry.offset() > targetOffset) {
-                break;
+        int lo = 0;
+        int hi = entries.size() - 1;
+        int best = -1;
+        while (lo <= hi) {
+            int mid = (lo + hi) >>> 1;
+            long offset = entries.get(mid).offset();
+            if (offset <= targetOffset) {
+                best = mid;
+                lo = mid + 1;
+            } else {
+                hi = mid - 1;
             }
-            position = entry.position();
         }
-        return position;
+        return best < 0 ? 0L : entries.get(best).position();
     }
 
     public void truncateToSize(long validIndexBytes) throws IOException {

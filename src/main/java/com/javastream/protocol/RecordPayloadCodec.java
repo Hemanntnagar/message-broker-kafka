@@ -18,6 +18,8 @@ public final class RecordPayloadCodec {
 
     private RecordPayloadCodec() {}
 
+    public record ProduceRecord(byte[] key, byte[] value, Map<String, byte[]> headers) {}
+
     public record ProduceRequest(
             String topic,
             int partitionHint,
@@ -27,7 +29,8 @@ public final class RecordPayloadCodec {
             ProducerAckLevel ackLevel,
             int requestTimeoutMillis,
             long producerId,
-            long sequenceNumber) {
+            long sequenceNumber,
+            List<ProduceRecord> additionalRecords) {
 
         public ProduceRequest(String topic, int partitionHint, byte[] key, byte[] value, Map<String, byte[]> headers) {
             this(
@@ -39,13 +42,26 @@ public final class RecordPayloadCodec {
                     ProducerAckLevel.ACK_LEADER,
                     0,
                     -1,
-                    0);
+                    0,
+                    List.of());
+        }
+
+        public List<ProduceRecord> allRecords() {
+            if (additionalRecords == null || additionalRecords.isEmpty()) {
+                return List.of(new ProduceRecord(key, value, headers));
+            }
+            List<ProduceRecord> all = new ArrayList<>(1 + additionalRecords.size());
+            all.add(new ProduceRecord(key, value, headers));
+            all.addAll(additionalRecords);
+            return List.copyOf(all);
         }
     }
 
     private static final int PRODUCE_DELIVERY_EXTENSION_BYTES = 1 + 4 + 8 + 8;
 
     public record ProduceResponse(long messageId, int partition, long offset) {}
+
+    public record ProduceBatchResponse(List<ProduceResponse> responses) {}
 
     public record FetchRequest(String topic, int partition, long offset, int maxRecords, int timeoutMillis) {}
 
@@ -94,6 +110,8 @@ public final class RecordPayloadCodec {
 
     public static byte[] encodeProduceRequest(ProduceRequest request) {
         byte[] topicBytes = utf8(request.topic());
+        List<ProduceRecord> trailing = request.additionalRecords() == null ? List.of() : request.additionalRecords();
+        int trailingSize = trailingRecordBytes(trailing);
         ByteBuffer buffer =
                 ByteBuffer.allocate(
                                 2
@@ -105,7 +123,8 @@ public final class RecordPayloadCodec {
                                         + nullableLength(request.value())
                                         + 2
                                         + headerBytes(request.headers())
-                                        + PRODUCE_DELIVERY_EXTENSION_BYTES)
+                                        + PRODUCE_DELIVERY_EXTENSION_BYTES
+                                        + (trailing.isEmpty() ? 0 : 4 + trailingSize))
                         .order(ByteOrder.BIG_ENDIAN);
         putUtf8Topic(buffer, topicBytes);
         buffer.putInt(request.partitionHint());
@@ -116,6 +135,12 @@ public final class RecordPayloadCodec {
         buffer.putInt(request.requestTimeoutMillis());
         buffer.putLong(request.producerId());
         buffer.putLong(request.sequenceNumber());
+        if (!trailing.isEmpty()) {
+            buffer.putInt(trailing.size());
+            for (ProduceRecord record : trailing) {
+                putProduceRecordBody(buffer, record);
+            }
+        }
         return toByteArray(buffer);
     }
 
@@ -136,9 +161,32 @@ public final class RecordPayloadCodec {
             producerId = buffer.getLong();
             sequenceNumber = buffer.getLong();
         }
+        List<ProduceRecord> additional = List.of();
+        if (buffer.remaining() >= 4) {
+            int additionalCount = buffer.getInt();
+            if (additionalCount < 0) {
+                throw new ProtocolDecodeException("Negative produce batch count: " + additionalCount);
+            }
+            if (additionalCount > 0) {
+                List<ProduceRecord> records = new ArrayList<>(additionalCount);
+                for (int i = 0; i < additionalCount; i++) {
+                    records.add(readProduceRecordBody(buffer));
+                }
+                additional = List.copyOf(records);
+            }
+        }
         ensureConsumed(buffer);
         return new ProduceRequest(
-                topic, partitionHint, key, value, headers, ackLevel, requestTimeoutMillis, producerId, sequenceNumber);
+                topic,
+                partitionHint,
+                key,
+                value,
+                headers,
+                ackLevel,
+                requestTimeoutMillis,
+                producerId,
+                sequenceNumber,
+                additional);
     }
 
     public static byte[] encodeProduceResponse(ProduceResponse response) {
@@ -149,12 +197,67 @@ public final class RecordPayloadCodec {
         return toByteArray(buffer);
     }
 
-    public static ProduceResponse decodeProduceResponse(byte[] payload) {
-        if (payload.length != 20) {
-            throw new ProtocolDecodeException("Produce response must be 20 bytes, got " + payload.length);
+    public static byte[] encodeProduceBatchResponse(ProduceBatchResponse response) {
+        List<ProduceResponse> list = response.responses();
+        if (list.size() == 1) {
+            return encodeProduceResponse(list.getFirst());
         }
+        ByteBuffer buffer = ByteBuffer.allocate(4 + list.size() * (8 + 4 + 8)).order(ByteOrder.BIG_ENDIAN);
+        buffer.putInt(list.size());
+        for (ProduceResponse item : list) {
+            buffer.putLong(item.messageId());
+            buffer.putInt(item.partition());
+            buffer.putLong(item.offset());
+        }
+        return toByteArray(buffer);
+    }
+
+    public static ProduceBatchResponse decodeProduceResponse(byte[] payload) {
         ByteBuffer buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN);
+        if (buffer.remaining() == 8 + 4 + 8) {
+            return new ProduceBatchResponse(List.of(decodeSingleProduceResponse(buffer)));
+        }
+        if (buffer.remaining() < 4) {
+            throw new ProtocolDecodeException("Truncated produce response");
+        }
+        int count = buffer.getInt();
+        if (count <= 0) {
+            throw new ProtocolDecodeException("Invalid produce batch response count: " + count);
+        }
+        List<ProduceResponse> responses = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            responses.add(decodeSingleProduceResponse(buffer));
+        }
+        ensureConsumed(buffer);
+        return new ProduceBatchResponse(List.copyOf(responses));
+    }
+
+    private static ProduceResponse decodeSingleProduceResponse(ByteBuffer buffer) {
+        if (buffer.remaining() < 8 + 4 + 8) {
+            throw new ProtocolDecodeException("Truncated produce response entry");
+        }
         return new ProduceResponse(buffer.getLong(), buffer.getInt(), buffer.getLong());
+    }
+
+    private static void putProduceRecordBody(ByteBuffer buffer, ProduceRecord record) {
+        putNullableBytes(buffer, record.key());
+        putNullableBytes(buffer, record.value());
+        putHeaders(buffer, record.headers());
+    }
+
+    private static ProduceRecord readProduceRecordBody(ByteBuffer buffer) {
+        byte[] key = readNullableBytes(buffer);
+        byte[] value = readNullableBytes(buffer);
+        Map<String, byte[]> headers = readHeaders(buffer);
+        return new ProduceRecord(key, value, headers);
+    }
+
+    private static int trailingRecordBytes(List<ProduceRecord> records) {
+        int size = 0;
+        for (ProduceRecord record : records) {
+            size += 4 + nullableLength(record.key()) + 4 + nullableLength(record.value()) + headerBytes(record.headers());
+        }
+        return size;
     }
 
     public static byte[] encodeFetchRequest(FetchRequest request) {

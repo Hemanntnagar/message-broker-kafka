@@ -51,6 +51,38 @@ class RecordPayloadCodecTest {
     }
 
     @Test
+    void produceBatchRoundTrip() {
+        byte[] value = "batch-value".getBytes(StandardCharsets.UTF_8);
+        List<RecordPayloadCodec.ProduceRecord> tail =
+                List.of(
+                        new RecordPayloadCodec.ProduceRecord(null, value, Map.of()),
+                        new RecordPayloadCodec.ProduceRecord("k2".getBytes(StandardCharsets.UTF_8), value, Map.of()));
+        RecordPayloadCodec.ProduceRequest request =
+                new RecordPayloadCodec.ProduceRequest(
+                        "batch-topic",
+                        0,
+                        "k1".getBytes(StandardCharsets.UTF_8),
+                        value,
+                        Map.of(),
+                        ProducerAckLevel.ACK_LEADER,
+                        0,
+                        -1,
+                        0,
+                        tail);
+        byte[] wire = RecordPayloadCodec.encodeProduceRequest(request);
+        RecordPayloadCodec.ProduceRequest decoded = RecordPayloadCodec.decodeProduceRequest(wire);
+        assertEquals(3, decoded.allRecords().size());
+        RecordPayloadCodec.ProduceBatchResponse response =
+                new RecordPayloadCodec.ProduceBatchResponse(
+                        List.of(
+                                new RecordPayloadCodec.ProduceResponse(1, 0, 0),
+                                new RecordPayloadCodec.ProduceResponse(2, 0, 1),
+                                new RecordPayloadCodec.ProduceResponse(3, 0, 2)));
+        byte[] responseWire = RecordPayloadCodec.encodeProduceBatchResponse(response);
+        assertEquals(3, RecordPayloadCodec.decodeProduceResponse(responseWire).responses().size());
+    }
+
+    @Test
     void fetchResponseRoundTrip() {
         RecordPayloadCodec.FetchResponse response =
                 new RecordPayloadCodec.FetchResponse(
