@@ -29,6 +29,7 @@ logs/
 *.log
 data/
 
-# Env secrets
+# Env secrets (keep .env.example in the repo for Compose)
 .env
-.env.*
+.env.local
+!.env.example
