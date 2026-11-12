@@ -2,6 +2,8 @@
 
 Custom binary framing for client–broker TCP connections. This is **not** the Apache Kafka protocol.
 
+Runnable clients: see [README.md](README.md#client-examples). Low-level framing tests live in `com.javastream.protocol.ProtocolEncoderDecoderTest`.
+
 All multi-byte fields are **big-endian**.
 
 ## Frame layout

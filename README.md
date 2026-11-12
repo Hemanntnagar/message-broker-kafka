@@ -1,89 +1,158 @@
 # JavaStream
 
-JavaStream is a **Kafka-inspired** distributed message broker built in Java.
+**JavaStream** is a Kafka-inspired distributed message broker written in Java: custom **JSTR** wire protocol, durable **segment logs**, **consumer groups**, **multi-broker replication**, optional **security**, and **Prometheus** metrics.
 
-**Phase 3** adds synchronous **producer** and **consumer** TCP clients, in-memory topic storage, and broker handling for `CREATE_TOPIC`, `PRODUCE`, `FETCH`, and `CONSUMER_ACK` on top of the Phase 2 wire protocol (default port **9092**).
+```mermaid
+flowchart TB
+  subgraph clients
+    P[ProducerClient]
+    C[ConsumerClient]
+    G[GroupConsumerClient]
+  end
+  subgraph broker JVM
+    BS[BrokerServer]
+    D[BrokerRequestDispatcher]
+    ST[(FileMessageStore)]
+    MON[Monitoring HTTP]
+  end
+  P --> BS
+  C --> BS
+  G --> BS
+  BS --> D --> ST
+  BS --> MON
+```
+
+## Features
+
+| Area | Status |
+|------|--------|
+| Topics, produce, fetch, consumer ack | Implemented |
+| Durable log segments + recovery | Implemented |
+| Consumer groups (join, heartbeat, commit) | Implemented |
+| Multi-broker replication + failover | Implemented (educational consensus) |
+| Delivery ack levels, high watermark | Implemented |
+| Monitoring (`/health`, `/ready`, `/metrics`) | Implemented |
+| Optional auth, ACLs, TLS (server) | Implemented; TLS partial — see [SECURITY.md](SECURITY.md) |
+| Docker multi-stage image + Compose | Implemented |
+| Kafka protocol compatibility | **Not** implemented (custom protocol only) |
 
 ## Requirements
 
 - Java **26**
-- Apache Maven **3.9+** (or use the included `./mvnw` wrapper)
+- Maven **3.9+** (or `./mvnw`)
 
-## Build & test
+## Build and test
 
 ```bash
 ./mvnw clean verify
 ```
 
-## Run the broker
+Artifacts:
 
-Start (listens on `network.listen.host` / `network.listen.port`, default `0.0.0.0:9092`):
+- `target/javastream-0.1.0-SNAPSHOT.jar`
+- `target/javastream-0.1.0-SNAPSHOT-jar-with-dependencies.jar` (recommended for `java -jar`)
 
-```bash
-./mvnw -q exec:java -Dexec.mainClass=com.javastream.server.JavaStreamApplication
-```
-
-Or after packaging:
+## Run a broker (local)
 
 ```bash
 ./mvnw -q package
-java -jar target/javastream-0.1.0-SNAPSHOT.jar
+java -jar target/javastream-0.1.0-SNAPSHOT-jar-with-dependencies.jar
 ```
 
-Stop gracefully with **Ctrl+C** (SIGINT). The JVM shutdown hook calls `JavaStreamServer.stop()`, which closes the `ServerSocket` and active client connections.
+Defaults: client **9092**, monitoring **8080**, data **`./data`**, logs **`./logs`**.
 
-### Manual TCP smoke test
-
-Wire format is documented in [PROTOCOL.md](PROTOCOL.md) (magic `JSTR`, version **1**, 16-byte header, payload). A minimal `PING` uses operation code **1** and an empty payload; the server responds with status **OK** and the same correlation ID.
-
-For scripted clients, use `ProtocolEncoder` / `ProtocolDecoder` in `com.javastream.protocol` (see protocol tests).
-
-### Producer / consumer example (Phase 3)
+Override via environment (see [CONFIGURATION.md](CONFIGURATION.md)):
 
 ```bash
-./mvnw -q exec:java -Dexec.mainClass=com.javastream.examples.ProducerConsumerExample
-```
-
-High-level clients: `com.javastream.producer.ProducerClient` and `com.javastream.consumer.ConsumerClient`.
-
-Override bind address/port:
-
-```bash
-export JAVASTREAM_NETWORK_LISTEN_HOST=127.0.0.1
 export JAVASTREAM_NETWORK_LISTEN_PORT=19092
-./mvnw -q exec:java -Dexec.mainClass=com.javastream.server.JavaStreamApplication
+export JAVASTREAM_STORAGE_DATA_DIR=/tmp/javastream-data
+java -jar target/javastream-0.1.0-SNAPSHOT-jar-with-dependencies.jar
 ```
 
-## Configuration
+Stop with **Ctrl+C** or **SIGTERM**; the shutdown hook calls `JavaStreamServer.stop()` for graceful socket drain.
 
-Defaults live in `src/main/resources/javastream-default.properties`.
+## Docker
 
-Override order (later wins):
+Build and run a **single** broker:
 
-1. Classpath defaults
-2. Optional file (`JAVASTREAM_CONFIG_FILE` or `-Djavastream.config.file=...`)
-3. Environment variables prefixed with `JAVASTREAM_` (e.g. `JAVASTREAM_NETWORK_LISTEN_PORT=9093` → `network.listen.port`)
+```bash
+cp .env.example .env   # COMPOSE_PROFILES=single
+docker compose --profile single up -d --build
+curl -fsS http://127.0.0.1:8080/health
+```
 
-## Package layout
+**Three-broker cluster** (replication factor 3):
 
-`com.javastream` — `server`, `protocol`, `broker`, `producer`, `consumer`, `topic`, `partition`, `storage`, `group`, `replication`, `cluster`, `config`, `metrics`, `admin`, `common`, `exception`
+```bash
+COMPOSE_PROFILES=cluster docker compose --profile cluster up -d --build
+# Client ports: 9092 (broker-0), 9094 (broker-1), 9096 (broker-2)
+# Monitoring: 8080, 8081, 8082
+```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for layering and design rules.
+Data and logs use named volumes (`broker-*-data`, `broker-*-logs`). Image: multi-stage [Dockerfile](Dockerfile), health check on `/health`, `STOPSIGNAL SIGTERM`.
 
-## Entry points
+## Client examples
 
-| Class | Role |
-|-------|------|
-| `com.javastream.server.JavaStreamApplication` | Broker process |
-| `com.javastream.admin.AdminCliApplication` | Admin CLI stub |
+Point examples at a running broker (default `127.0.0.1:9092`):
 
-## Logging
+```bash
+export JAVASTREAM_EXAMPLE_BROKER_HOST=127.0.0.1
+export JAVASTREAM_EXAMPLE_BROKER_PORT=9092
+```
 
-SLF4J with Logback: `src/main/resources/logback.xml` (console + rolling file under `logs/`).
+| Example | Main class |
+|---------|------------|
+| Producer | `com.javastream.examples.ProducerExample` |
+| Consumer | `com.javastream.examples.ConsumerExample` |
+| Multiple producers | `com.javastream.examples.MultipleProducersExample` |
+| Multiple consumers | `com.javastream.examples.MultipleConsumersExample` |
+| Consumer group | `com.javastream.examples.ConsumerGroupExample` |
+| Topic creation + list | `com.javastream.examples.TopicCreationExample` |
+| Low-level produce/fetch | `com.javastream.examples.PublishAndFetchExample` |
+| Embedded broker demo | `com.javastream.examples.ProducerConsumerExample` |
 
-## Performance benchmarks (Phase 10)
+```bash
+./scripts/run-examples.sh com.javastream.examples.ProducerExample
+./mvnw -q exec:java -Dexec.mainClass=com.javastream.examples.ConsumerGroupExample
+```
 
-See [PERFORMANCE.md](PERFORMANCE.md) for JMH microbenchmarks and the end-to-end load generator. Measured results are written to `BENCHMARK_REPORT.md` when you run `com.javastream.benchmark.BenchmarkCli`.
+High-level APIs: `com.javastream.producer.ProducerClient`, `com.javastream.consumer.ConsumerClient`, `com.javastream.consumer.GroupConsumerClient`.
+
+## Documentation
+
+| Document | Contents |
+|----------|----------|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Layers, packages, dependency rules |
+| [PROTOCOL.md](PROTOCOL.md) | JSTR v1 framing and payloads |
+| [STORAGE_ENGINE.md](STORAGE_ENGINE.md) | On-disk layout and recovery |
+| [REPLICATION.md](REPLICATION.md) | Cluster and replication model |
+| [CONFIGURATION.md](CONFIGURATION.md) | Keys and env mapping |
+| [BENCHMARKS.md](BENCHMARKS.md) | How to benchmark |
+| [BENCHMARK_REPORT.md](BENCHMARK_REPORT.md) | Measured results |
+| [CONSUMER_GROUPS.md](CONSUMER_GROUPS.md) | Group vs independent consumers |
+| [DELIVERY_GUARANTEES.md](DELIVERY_GUARANTEES.md) | Ack levels |
+| [SECURITY.md](SECURITY.md) | Auth, ACL, TLS |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Dev workflow |
+| [RELEASE_REPORT.md](RELEASE_REPORT.md) | Phase 13 release summary |
+
+## Monitoring
+
+When `monitoring.http.port > 0`:
+
+| Path | Purpose |
+|------|---------|
+| `/health` | Liveness JSON `{"status":"UP"}` |
+| `/ready` | Readiness after broker start |
+| `/metrics` | Prometheus text exposition |
+| `/admin/*` | Operator JSON API (optional token) |
+
+## Known limitations
+
+- Not suitable as a drop-in Apache Kafka replacement (different protocol and ops model).
+- Cluster coordinator is a single broker id — not fault-tolerant membership service.
+- Replication and client redirect semantics are best-effort; see [REPLICATION.md](REPLICATION.md).
+- High-level clients do not auto-authenticate when security is enabled.
+- License: TBD.
 
 ## License
 

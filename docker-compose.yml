@@ -1,0 +1,118 @@
+# JavaStream — pick one profile (do not combine):
+#
+#   COMPOSE_PROFILES=single docker compose up -d --build
+#   COMPOSE_PROFILES=cluster docker compose up -d --build
+#
+# Or: docker compose --profile single up -d
+#     docker compose --profile cluster up -d
+
+x-broker-common: &broker-common
+  build: .
+  image: javastream:local
+  restart: unless-stopped
+  stop_grace_period: 30s
+  environment: &broker-env
+    JAVASTREAM_ENVIRONMENT: production
+    JAVASTREAM_NETWORK_LISTEN_HOST: 0.0.0.0
+    JAVASTREAM_NETWORK_LISTEN_PORT: 9092
+    JAVASTREAM_STORAGE_DATA_DIR: /var/lib/javastream/data
+    JAVASTREAM_LOG_DIR: /var/lib/javastream/logs
+    JAVASTREAM_MONITORING_HTTP_HOST: 0.0.0.0
+
+services:
+  broker:
+    <<: *broker-common
+    profiles: ["single"]
+    hostname: broker
+    ports:
+      - "9092:9092"
+      - "8080:8080"
+    environment:
+      <<: *broker-env
+      JAVASTREAM_BROKER_ID: 0
+      JAVASTREAM_MONITORING_HTTP_PORT: 8080
+      JAVASTREAM_CLUSTER_ENABLED: "false"
+    volumes:
+      - javastream-data:/var/lib/javastream/data
+      - javastream-logs:/var/lib/javastream/logs
+
+  broker-0:
+    <<: *broker-common
+    profiles: ["cluster"]
+    hostname: broker-0
+    ports:
+      - "9092:9092"
+      - "8080:8080"
+    environment:
+      <<: *broker-env
+      JAVASTREAM_BROKER_ID: 0
+      JAVASTREAM_MONITORING_HTTP_PORT: 8080
+      JAVASTREAM_CLUSTER_ENABLED: "true"
+      JAVASTREAM_CLUSTER_COORDINATOR_ID: 0
+      JAVASTREAM_CLUSTER_COORDINATOR_HOST: broker-0
+      JAVASTREAM_CLUSTER_COORDINATOR_PORT: 19092
+      JAVASTREAM_NETWORK_REPLICATION_PORT: 19092
+      JAVASTREAM_CLUSTER_REPLICATION_FACTOR: 3
+      JAVASTREAM_CLUSTER_SESSION_TIMEOUT_MS: 15000
+      JAVASTREAM_CLUSTER_HEARTBEAT_INTERVAL_MS: 2000
+    volumes:
+      - broker-0-data:/var/lib/javastream/data
+      - broker-0-logs:/var/lib/javastream/logs
+
+  broker-1:
+    <<: *broker-common
+    profiles: ["cluster"]
+    hostname: broker-1
+    depends_on:
+      broker-0:
+        condition: service_healthy
+    ports:
+      - "9094:9092"
+      - "8081:8080"
+    environment:
+      <<: *broker-env
+      JAVASTREAM_BROKER_ID: 1
+      JAVASTREAM_MONITORING_HTTP_PORT: 8080
+      JAVASTREAM_CLUSTER_ENABLED: "true"
+      JAVASTREAM_CLUSTER_COORDINATOR_ID: 0
+      JAVASTREAM_CLUSTER_COORDINATOR_HOST: broker-0
+      JAVASTREAM_CLUSTER_COORDINATOR_PORT: 19092
+      JAVASTREAM_NETWORK_REPLICATION_PORT: 19092
+      JAVASTREAM_CLUSTER_REPLICATION_FACTOR: 3
+    volumes:
+      - broker-1-data:/var/lib/javastream/data
+      - broker-1-logs:/var/lib/javastream/logs
+
+  broker-2:
+    <<: *broker-common
+    profiles: ["cluster"]
+    hostname: broker-2
+    depends_on:
+      broker-0:
+        condition: service_healthy
+    ports:
+      - "9096:9092"
+      - "8082:8080"
+    environment:
+      <<: *broker-env
+      JAVASTREAM_BROKER_ID: 2
+      JAVASTREAM_MONITORING_HTTP_PORT: 8080
+      JAVASTREAM_CLUSTER_ENABLED: "true"
+      JAVASTREAM_CLUSTER_COORDINATOR_ID: 0
+      JAVASTREAM_CLUSTER_COORDINATOR_HOST: broker-0
+      JAVASTREAM_CLUSTER_COORDINATOR_PORT: 19092
+      JAVASTREAM_NETWORK_REPLICATION_PORT: 19092
+      JAVASTREAM_CLUSTER_REPLICATION_FACTOR: 3
+    volumes:
+      - broker-2-data:/var/lib/javastream/data
+      - broker-2-logs:/var/lib/javastream/logs
+
+volumes:
+  javastream-data:
+  javastream-logs:
+  broker-0-data:
+  broker-0-logs:
+  broker-1-data:
+  broker-1-logs:
+  broker-2-data:
+  broker-2-logs:

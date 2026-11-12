@@ -2,102 +2,83 @@
 
 ## Goals
 
-Build a multi-broker-capable message log with clear boundaries: **networking**, **protocol**, **broker orchestration**, and **storage** stay separate. Components are **interface-first** and wired through **constructor injection**—no DI framework in Phase 0.
+Deliver a **readable**, **testable** message log with strict layering: networking, protocol, broker orchestration, and storage evolve independently. **Apache Kafka is not embedded** — JavaStream implements its own protocols and persistence.
 
-Apache Kafka is **not** used as an internal dependency; JavaStream implements its own protocol and storage over time.
-
-## Layering
+## System context
 
 ```text
-┌─────────────────────────────────────────────────────────┐
-│  server (JavaStreamServer, JavaStreamApplication)       │
-│  Process lifecycle, shutdown hooks, config bootstrap      │
-└───────────────────────────┬─────────────────────────────┘
-                            │
-┌───────────────────────────▼─────────────────────────────┐
-│  broker (BrokerNode)                                    │
-│  Orchestrates topic/partition/replication on this node    │
-└─┬──────────────┬──────────────┬──────────────┬──────────┘
-  │              │              │              │
-  ▼              ▼              ▼              ▼
-topic/      partition/     group/        replication/
-partition   leadership     coordinator   ReplicaManager
-  │              │              │              │
-  └──────────────┴──────┬───────┴──────────────┘
-                        ▼
-                   storage/
-                   MessageStore (durable log — later phase)
-                        ▲
-                        │ (no direct coupling from protocol)
-┌───────────────────────┴─────────────────────────────────┐
-│  protocol (RequestHandler, ProtocolCodec)                 │
-│  Wire framing only; delegates to broker services          │
-└───────────────────────────┬─────────────────────────────┘
-                            │
-                     server.BrokerServer + ClientHandler (Phase 1 TCP)
+┌──────────────────────────────────────────────────────────────────┐
+│  JavaStreamApplication → JavaStreamServer → BrokerNode             │
+│    • shutdown hooks (SIGINT / SIGTERM)                             │
+│    • MonitoringHttpServer (/health, /ready, /metrics, /admin)      │
+└────────────────────────────┬─────────────────────────────────────┘
+                             │
+         ┌───────────────────┴───────────────────┐
+         ▼                                       ▼
+   TcpBrokerNode                         ClusterBrokerNode
+   (cluster.enabled=false)               (cluster + JREP replication)
+         │                                       │
+         └───────────────────┬───────────────────┘
+                             ▼
+                    BrokerServer (TCP acceptor)
+                             │
+                    ClientHandler (per connection)
+                             ▼
+                    BrokerRequestDispatcher
+                             │
+         ┌───────────────────┼───────────────────┐
+         ▼                   ▼                   ▼
+   TopicManager      ConsumerGroupManager   ClusterManager *
+   Partition logs     offset catalog        (* cluster only)
+         │
+         ▼
+   FileMessageStore / InMemoryMessageStore
 ```
 
-## Module map
+## Package map (current)
 
-| Package | Responsibility | Current state |
-|---------|----------------|---------------|
-| `server` | JVM entry, TCP acceptor | `JavaStreamServer`, `BrokerServer`, `ClientHandler` |
-| `config` | Layered config, env overrides | `ConfigLoader`, `JavaStreamConfig` |
-| `broker` | Node coordinator | `TcpBrokerNode` (default), `NoOpBrokerNode` (tests) |
-| `protocol` | Encode/decode, dispatch | `ProtocolEncoder`, `ProtocolDecoder`, v1 frames — see `PROTOCOL.md` |
-| `topic` / `partition` | Naming & shard identity | Value types + registry interface |
-| `storage` | Append/read log | Interface only |
-| `producer` / `consumer` | Client APIs | Interfaces only |
-| `group` | Consumer groups | `ConsumerGroupManager`, round-robin assignor, offset catalog |
-| `replication` | ISR / replicas | Interface only |
-| `cluster` | Membership, `BrokerId` | Interface only |
-| `metrics` | Observability hooks | Interface only |
-| `admin` | Operator API / CLI stub | `AdminCliApplication` |
-| `common` / `exception` | Shared utilities | Preconditions, base errors |
+| Package | Responsibility |
+|---------|----------------|
+| `server` | Process entry, `BrokerServer`, `ClientHandler` |
+| `broker` | `TcpBrokerNode`, `ClusterBrokerNode`, request dispatch |
+| `protocol` | JSTR v1 codec, operation codes — [PROTOCOL.md](PROTOCOL.md) |
+| `storage` | `FileMessageStore`, segments, indexes — [STORAGE_ENGINE.md](STORAGE_ENGINE.md) |
+| `topic` / `partition` | Topic registry, `PartitionId`, leadership metadata |
+| `producer` / `consumer` | TCP client libraries + `examples` |
+| `group` | Consumer group coordinator |
+| `replication` / `cluster` | Inter-broker replication, membership — [REPLICATION.md](REPLICATION.md) |
+| `delivery` | Producer ack levels, high watermark helpers |
+| `config` | Layered configuration — [CONFIGURATION.md](CONFIGURATION.md) |
+| `metrics` / `monitoring` | Micrometer registry, HTTP export |
+| `admin` | Admin CLI and JSON admin service |
+| `security` | Optional auth, ACL, TLS — [SECURITY.md](SECURITY.md) |
+| `benchmark` | JMH and load generator — [BENCHMARKS.md](BENCHMARKS.md) |
 
-## Multi-broker design (forward-looking)
+## Configuration
 
-- Each process has a **`broker.id`** and optional **`cluster.enabled`**.
-- **`PartitionLeader`** and **`ClusterMembership`** will elect/serve leaders per partition across brokers.
-- **`ReplicaManager`** tracks in-sync replicas; storage remains local per broker with replication streams added later.
-
-## Configuration model
-
-Immutable **`JavaStreamConfig`** built by **`ConfigLoader`**:
-
-1. `javastream-default.properties` on the classpath  
-2. Optional external properties file  
-3. `JAVASTREAM_*` environment variables via **`EnvironmentConfigSource`**
-
-Invalid or missing required resources fail fast with **`ConfigurationException`**.
+Immutable **`JavaStreamConfig`** from **`ConfigLoader`**: classpath defaults → optional file → `JAVASTREAM_*` environment variables.
 
 ## Dependency rules
 
-1. **Storage must not import protocol or server.**
-2. **Protocol must not import storage directly** (goes through broker services).
-3. **Producer/consumer packages** are client-oriented; broker internals do not depend on them.
-4. Prefer **small classes** over god objects; Phase 0 uses no-op implementations where behavior is not yet defined.
+1. **Storage** must not depend on protocol or server packages.
+2. **Protocol** does not import storage; requests are handled in the broker layer.
+3. **Client packages** (`producer`, `consumer`, `examples`) are not depended on by the broker core.
+4. Prefer constructor injection over static service locators.
 
-## Testing strategy (Phase 0)
+## Threading model
 
-JUnit 5 unit tests for configuration loading, environment key mapping, server lifecycle, and shared validators. Integration and protocol tests arrive with networking and storage.
+- Virtual threads per client connection (`ClientHandler`).
+- Cluster heartbeat and replication use dedicated broker-side executors.
+- Periodic log flush uses a virtual thread when `storage.flush.policy=PERIODIC`.
 
-## Phase 1 networking
+## Deployment
 
-- **`BrokerServer`**: `ServerSocket` accept loop on a virtual thread; binds `JavaStreamConfig.listenHost()` / `listenPort()` (default **9092**).
-- **`ClientHandler`**: one virtual thread per connection; JavaStream v1 binary frames via `ProtocolDecoder` / `ProtocolEncoder`; socket read timeout **30s**; max payload **1 MiB**; `PING` and stub `OK` responses until broker services land.
+- **JAR**: fat jar from Maven assembly; main class `com.javastream.server.JavaStreamApplication`.
+- **Docker**: see [Dockerfile](Dockerfile) and [docker-compose.yml](docker-compose.yml).
+- **CI**: GitHub Actions `verify` on JDK 26.
 
-## Phase 2 protocol
+## Testing strategy
 
-- **`PROTOCOL.md`**: magic, version, correlation ID, operation/status, length-prefixed payload.
-- **`ProtocolDecoder`**: streaming reassembly (partial reads, multiple frames per read); rejects bad magic, version, and oversize lengths.
-- **`ProtocolEncoder`**: symmetric request/response framing.
-- Graceful shutdown closes the listening socket and all tracked client sockets.
-
-## Next phases (not in scope here)
-
-1. Request pipeline (`protocol` + broker services)
-2. Segment-based `MessageStore`
-3. Topic creation and partition assignment on `BrokerNode`
-4. Replication and cluster coordination
-5. Producer/consumer client libraries
+- Unit tests for codec, config, storage indexes, security primitives.
+- Integration tests spin real `BrokerServer` / `ClusterBrokerNode` on ephemeral ports.
+- See `src/test/java/com/javastream/server/*IntegrationTest.java`.
