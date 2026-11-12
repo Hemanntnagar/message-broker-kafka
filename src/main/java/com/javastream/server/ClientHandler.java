@@ -1,13 +1,11 @@
 package com.javastream.server;
 
 import com.javastream.exception.ProtocolDecodeException;
-import com.javastream.protocol.OperationCode;
 import com.javastream.protocol.ProtocolConstants;
 import com.javastream.protocol.ProtocolDecoder;
 import com.javastream.protocol.ProtocolEncoder;
 import com.javastream.protocol.Request;
 import com.javastream.protocol.Response;
-import com.javastream.protocol.StatusCode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,12 +32,19 @@ public final class ClientHandler implements Runnable {
   private final int socketTimeoutMs;
   private final int maxRequestBytes;
   private final Consumer<ClientHandler> onClose;
+  private final com.javastream.broker.BrokerRequestDispatcher dispatcher;
 
-  ClientHandler(Socket socket, int socketTimeoutMs, int maxRequestBytes, Consumer<ClientHandler> onClose) {
+  ClientHandler(
+      Socket socket,
+      int socketTimeoutMs,
+      int maxRequestBytes,
+      Consumer<ClientHandler> onClose,
+      com.javastream.broker.BrokerRequestDispatcher dispatcher) {
     this.socket = socket;
     this.socketTimeoutMs = socketTimeoutMs;
     this.maxRequestBytes = maxRequestBytes;
     this.onClose = onClose;
+    this.dispatcher = dispatcher;
   }
 
   @Override
@@ -111,14 +116,7 @@ public final class ClientHandler implements Runnable {
   }
 
   private Response dispatch(Request request) {
-    if (request.operation() == OperationCode.PING) {
-      return Response.ok(request.correlationId(), new byte[0]);
-    }
-    return new Response(
-        ProtocolConstants.VERSION_1,
-        request.correlationId(),
-        StatusCode.OK,
-        new byte[0]);
+    return dispatcher.dispatch(request);
   }
 
   void closeQuietly() {

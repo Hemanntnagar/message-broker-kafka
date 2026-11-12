@@ -41,6 +41,48 @@ Header size for both directions: **16 bytes**.
 | 5 | `FETCH` |
 | 6 | `DELETE_TOPIC` |
 | 7 | `GET_METADATA` |
+| 8 | `CONSUMER_ACK` |
+
+## Operation payloads (v1)
+
+### `CREATE_TOPIC` (2)
+
+| Field | Type |
+|-------|------|
+| Topic name | `uint16` length + UTF-8 |
+| Partition count | `int32` (> 0) |
+
+### `PRODUCE` (4)
+
+| Field | Type |
+|-------|------|
+| Topic name | `uint16` length + UTF-8 |
+| Partition hint | `int32` (`-1` = broker assigns) |
+| Key | `int32` length (`-1` = null) + bytes |
+| Value | `int32` length (`-1` = null) + bytes |
+| Headers | `uint16` count, then repeated (`uint16` key len + key + `uint16` value len + value) |
+
+**OK response payload:** `uint64` messageId, `int32` partition, `int64` offset (20 bytes total).
+
+### `FETCH` (5)
+
+| Field | Type |
+|-------|------|
+| Topic name | `uint16` length + UTF-8 |
+| Partition | `int32` |
+| Offset | `int64` |
+| Max records | `int32` |
+| Timeout millis | `int32` (advisory; broker returns immediately) |
+
+**OK response payload:** `int32` record count, then for each record: messageId, partition, offset, timestamp (epoch ms), key, value, headers (same encoding as produce).
+
+### `CONSUMER_ACK` (8)
+
+| Field | Type |
+|-------|------|
+| Topic name | `uint16` length + UTF-8 |
+| Partition | `int32` |
+| Offset | `int64` |
 
 ## Status codes (v1)
 

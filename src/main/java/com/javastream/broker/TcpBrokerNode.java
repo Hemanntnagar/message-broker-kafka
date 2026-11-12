@@ -11,14 +11,27 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class TcpBrokerNode implements BrokerNode {
 
     private final BrokerServer brokerServer;
+    private final BrokerServices brokerServices;
     private final AtomicBoolean started = new AtomicBoolean(false);
 
     public TcpBrokerNode(JavaStreamConfig config) {
-        this.brokerServer = new BrokerServer(config);
+        BrokerServices services = new BrokerServices();
+        this.brokerServices = services;
+        this.brokerServer = new BrokerServer(config, services);
+    }
+
+    TcpBrokerNode(BrokerServices brokerServices, BrokerServer brokerServer) {
+        this.brokerServices = brokerServices;
+        this.brokerServer = brokerServer;
     }
 
     TcpBrokerNode(BrokerServer brokerServer) {
+        this.brokerServices = new BrokerServices();
         this.brokerServer = brokerServer;
+    }
+
+    public BrokerServices brokerServices() {
+        return brokerServices;
     }
 
     public BrokerServer brokerServer() {

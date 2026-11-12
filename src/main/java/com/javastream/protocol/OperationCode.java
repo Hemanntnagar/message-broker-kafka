@@ -10,7 +10,8 @@ public enum OperationCode {
   PRODUCE(4),
   FETCH(5),
   DELETE_TOPIC(6),
-  GET_METADATA(7);
+  GET_METADATA(7),
+  CONSUMER_ACK(8);
 
   private final short wireValue;
 

@@ -1,5 +1,7 @@
 package com.javastream.server;
 
+import com.javastream.broker.BrokerRequestDispatcher;
+import com.javastream.broker.BrokerServices;
 import com.javastream.config.JavaStreamConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,6 +32,7 @@ public final class BrokerServer {
     private final int socketTimeoutMs;
     private final int maxRequestBytes;
     private final int backlog;
+    private final BrokerRequestDispatcher dispatcher;
 
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final Set<ClientHandler> activeHandlers = ConcurrentHashMap.newKeySet();
@@ -38,12 +41,17 @@ public final class BrokerServer {
     private Thread acceptorThread;
 
     public BrokerServer(JavaStreamConfig config) {
+        this(config, new BrokerServices());
+    }
+
+    public BrokerServer(JavaStreamConfig config, BrokerServices brokerServices) {
         this(
                 config.listenHost(),
                 config.listenPort(),
                 DEFAULT_SOCKET_TIMEOUT_MS,
                 DEFAULT_MAX_REQUEST_BYTES,
-                DEFAULT_BACKLOG);
+                DEFAULT_BACKLOG,
+                new BrokerRequestDispatcher(brokerServices));
     }
 
     BrokerServer(
@@ -52,11 +60,26 @@ public final class BrokerServer {
             int socketTimeoutMs,
             int maxRequestBytes,
             int backlog) {
+        this(listenHost, listenPort, socketTimeoutMs, maxRequestBytes, backlog, new BrokerRequestDispatcher(new BrokerServices()));
+    }
+
+    BrokerServer(
+            String listenHost,
+            int listenPort,
+            int socketTimeoutMs,
+            int maxRequestBytes,
+            int backlog,
+            BrokerRequestDispatcher dispatcher) {
         this.listenHost = listenHost;
         this.listenPort = listenPort;
         this.socketTimeoutMs = socketTimeoutMs;
         this.maxRequestBytes = maxRequestBytes;
         this.backlog = backlog;
+        this.dispatcher = dispatcher;
+    }
+
+    public BrokerRequestDispatcher dispatcher() {
+        return dispatcher;
     }
 
     public String listenHost() {
@@ -107,7 +130,7 @@ public final class BrokerServer {
                 Socket clientSocket = serverSocket.accept();
                 configureClientSocket(clientSocket);
                 ClientHandler handler = new ClientHandler(
-                        clientSocket, socketTimeoutMs, maxRequestBytes, activeHandlers::remove);
+                        clientSocket, socketTimeoutMs, maxRequestBytes, activeHandlers::remove, dispatcher);
                 activeHandlers.add(handler);
                 Thread.ofVirtual().name("broker-client-" + clientSocket.getPort()).start(handler);
             } catch (IOException e) {

@@ -2,7 +2,7 @@
 
 JavaStream is a **Kafka-inspired** distributed message broker built in Java.
 
-**Phase 2** adds the versioned JavaStream binary wire protocol on top of the Phase 1 TCP listener (default port **9092**). Message storage and full broker operations are not implemented yet.
+**Phase 3** adds synchronous **producer** and **consumer** TCP clients, in-memory topic storage, and broker handling for `CREATE_TOPIC`, `PRODUCE`, `FETCH`, and `CONSUMER_ACK` on top of the Phase 2 wire protocol (default port **9092**).
 
 ## Requirements
 
@@ -37,6 +37,14 @@ Stop gracefully with **Ctrl+C** (SIGINT). The JVM shutdown hook calls `JavaStrea
 Wire format is documented in [PROTOCOL.md](PROTOCOL.md) (magic `JSTR`, version **1**, 16-byte header, payload). A minimal `PING` uses operation code **1** and an empty payload; the server responds with status **OK** and the same correlation ID.
 
 For scripted clients, use `ProtocolEncoder` / `ProtocolDecoder` in `com.javastream.protocol` (see protocol tests).
+
+### Producer / consumer example (Phase 3)
+
+```bash
+./mvnw -q exec:java -Dexec.mainClass=com.javastream.examples.ProducerConsumerExample
+```
+
+High-level clients: `com.javastream.producer.ProducerClient` and `com.javastream.consumer.ConsumerClient`.
 
 Override bind address/port:
 

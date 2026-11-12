@@ -1,0 +1,336 @@
+package com.javastream.protocol;
+
+import com.javastream.exception.ProtocolDecodeException;
+
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/** Encode/decode produce, fetch, and ack operation payloads (v1). */
+public final class RecordPayloadCodec {
+
+    public static final int AUTO_PARTITION = -1;
+
+    private RecordPayloadCodec() {}
+
+    public record ProduceRequest(
+            String topic,
+            int partitionHint,
+            byte[] key,
+            byte[] value,
+            Map<String, byte[]> headers) {}
+
+    public record ProduceResponse(long messageId, int partition, long offset) {}
+
+    public record FetchRequest(String topic, int partition, long offset, int maxRecords, int timeoutMillis) {}
+
+    public record FetchedRecord(
+            long messageId,
+            int partition,
+            long offset,
+            long timestampEpochMillis,
+            byte[] key,
+            byte[] value,
+            Map<String, byte[]> headers) {}
+
+    public record FetchResponse(List<FetchedRecord> records) {}
+
+    public record AckRequest(String topic, int partition, long offset) {}
+
+    public record CreateTopicRequest(String topic, int partitionCount) {}
+
+    public static byte[] encodeProduceRequest(ProduceRequest request) {
+        byte[] topicBytes = utf8(request.topic());
+        ByteBuffer buffer =
+                ByteBuffer.allocate(2 + topicBytes.length + 4 + 4 + nullableLength(request.key) + 4
+                                + nullableLength(request.value) + 2 + headerBytes(request.headers))
+                        .order(ByteOrder.BIG_ENDIAN);
+        putUtf8Topic(buffer, topicBytes);
+        buffer.putInt(request.partitionHint());
+        putNullableBytes(buffer, request.key());
+        putNullableBytes(buffer, request.value());
+        putHeaders(buffer, request.headers());
+        return toByteArray(buffer);
+    }
+
+    public static ProduceRequest decodeProduceRequest(byte[] payload) {
+        ByteBuffer buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN);
+        String topic = readUtf8Topic(buffer);
+        int partitionHint = buffer.getInt();
+        byte[] key = readNullableBytes(buffer);
+        byte[] value = readNullableBytes(buffer);
+        Map<String, byte[]> headers = readHeaders(buffer);
+        ensureConsumed(buffer);
+        return new ProduceRequest(topic, partitionHint, key, value, headers);
+    }
+
+    public static byte[] encodeProduceResponse(ProduceResponse response) {
+        ByteBuffer buffer = ByteBuffer.allocate(8 + 4 + 8).order(ByteOrder.BIG_ENDIAN);
+        buffer.putLong(response.messageId());
+        buffer.putInt(response.partition());
+        buffer.putLong(response.offset());
+        return toByteArray(buffer);
+    }
+
+    public static ProduceResponse decodeProduceResponse(byte[] payload) {
+        if (payload.length != 20) {
+            throw new ProtocolDecodeException("Produce response must be 20 bytes, got " + payload.length);
+        }
+        ByteBuffer buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN);
+        return new ProduceResponse(buffer.getLong(), buffer.getInt(), buffer.getLong());
+    }
+
+    public static byte[] encodeFetchRequest(FetchRequest request) {
+        byte[] topicBytes = utf8(request.topic());
+        ByteBuffer buffer = ByteBuffer.allocate(2 + topicBytes.length + 4 + 8 + 4 + 4).order(ByteOrder.BIG_ENDIAN);
+        buffer.putShort((short) topicBytes.length);
+        buffer.put(topicBytes);
+        buffer.putInt(request.partition());
+        buffer.putLong(request.offset());
+        buffer.putInt(request.maxRecords());
+        buffer.putInt(request.timeoutMillis());
+        return toByteArray(buffer);
+    }
+
+    public static FetchRequest decodeFetchRequest(byte[] payload) {
+        ByteBuffer buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN);
+        String topic = readUtf8Topic(buffer);
+        int partition = buffer.getInt();
+        long offset = buffer.getLong();
+        int maxRecords = buffer.getInt();
+        int timeoutMillis = buffer.getInt();
+        ensureConsumed(buffer);
+        return new FetchRequest(topic, partition, offset, maxRecords, timeoutMillis);
+    }
+
+    public static byte[] encodeFetchResponse(FetchResponse response) {
+        int size = 4;
+        for (FetchedRecord record : response.records()) {
+            size += recordSize(record);
+        }
+        ByteBuffer buffer = ByteBuffer.allocate(size).order(ByteOrder.BIG_ENDIAN);
+        buffer.putInt(response.records().size());
+        for (FetchedRecord record : response.records()) {
+            writeRecord(buffer, record);
+        }
+        return toByteArray(buffer);
+    }
+
+    public static FetchResponse decodeFetchResponse(byte[] payload) {
+        ByteBuffer buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN);
+        int count = buffer.getInt();
+        if (count < 0) {
+            throw new ProtocolDecodeException("Negative fetch record count: " + count);
+        }
+        List<FetchedRecord> records = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            records.add(readRecord(buffer));
+        }
+        ensureConsumed(buffer);
+        return new FetchResponse(List.copyOf(records));
+    }
+
+    public static byte[] encodeAckRequest(AckRequest request) {
+        byte[] topicBytes = utf8(request.topic());
+        ByteBuffer buffer = ByteBuffer.allocate(2 + topicBytes.length + 4 + 8).order(ByteOrder.BIG_ENDIAN);
+        buffer.putShort((short) topicBytes.length);
+        buffer.put(topicBytes);
+        buffer.putInt(request.partition());
+        buffer.putLong(request.offset());
+        return toByteArray(buffer);
+    }
+
+    public static AckRequest decodeAckRequest(byte[] payload) {
+        ByteBuffer buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN);
+        String topic = readUtf8Topic(buffer);
+        int partition = buffer.getInt();
+        long offset = buffer.getLong();
+        ensureConsumed(buffer);
+        return new AckRequest(topic, partition, offset);
+    }
+
+    public static byte[] encodeCreateTopicRequest(CreateTopicRequest request) {
+        byte[] topicBytes = utf8(request.topic());
+        ByteBuffer buffer = ByteBuffer.allocate(2 + topicBytes.length + 4).order(ByteOrder.BIG_ENDIAN);
+        buffer.putShort((short) topicBytes.length);
+        buffer.put(topicBytes);
+        buffer.putInt(request.partitionCount());
+        return toByteArray(buffer);
+    }
+
+    public static CreateTopicRequest decodeCreateTopicRequest(byte[] payload) {
+        ByteBuffer buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN);
+        String topic = readUtf8Topic(buffer);
+        int partitionCount = buffer.getInt();
+        ensureConsumed(buffer);
+        return new CreateTopicRequest(topic, partitionCount);
+    }
+
+    private static int recordSize(FetchedRecord record) {
+        return 8 + 4 + 8 + 8 + 4 + nullableLength(record.key()) + 4 + nullableLength(record.value()) + 2
+                + headerBytes(record.headers());
+    }
+
+    private static void writeRecord(ByteBuffer buffer, FetchedRecord record) {
+        buffer.putLong(record.messageId());
+        buffer.putInt(record.partition());
+        buffer.putLong(record.offset());
+        buffer.putLong(record.timestampEpochMillis());
+        putNullableBytes(buffer, record.key());
+        putNullableBytes(buffer, record.value());
+        putHeaders(buffer, record.headers());
+    }
+
+    private static FetchedRecord readRecord(ByteBuffer buffer) {
+        long messageId = buffer.getLong();
+        int partition = buffer.getInt();
+        long offset = buffer.getLong();
+        long timestamp = buffer.getLong();
+        byte[] key = readNullableBytes(buffer);
+        byte[] value = readNullableBytes(buffer);
+        Map<String, byte[]> headers = readHeaders(buffer);
+        return new FetchedRecord(messageId, partition, offset, timestamp, key, value, headers);
+    }
+
+    private static void putUtf8Topic(ByteBuffer buffer, byte[] topicBytes) {
+        if (topicBytes.length > Short.MAX_VALUE) {
+            throw new ProtocolDecodeException("Topic name too long");
+        }
+        buffer.putShort((short) topicBytes.length);
+        buffer.put(topicBytes);
+    }
+
+    private static String readUtf8Topic(ByteBuffer buffer) {
+        if (buffer.remaining() < 2) {
+            throw new ProtocolDecodeException("Truncated topic length");
+        }
+        int length = buffer.getShort() & 0xFFFF;
+        if (buffer.remaining() < length) {
+            throw new ProtocolDecodeException("Truncated topic name");
+        }
+        byte[] topicBytes = new byte[length];
+        buffer.get(topicBytes);
+        return new String(topicBytes, StandardCharsets.UTF_8);
+    }
+
+    private static void putNullableBytes(ByteBuffer buffer, byte[] bytes) {
+        if (bytes == null) {
+            buffer.putInt(-1);
+            return;
+        }
+        if (bytes.length > Integer.MAX_VALUE - 4) {
+            throw new ProtocolDecodeException("Byte array too large");
+        }
+        buffer.putInt(bytes.length);
+        buffer.put(bytes);
+    }
+
+    private static byte[] readNullableBytes(ByteBuffer buffer) {
+        if (buffer.remaining() < 4) {
+            throw new ProtocolDecodeException("Truncated nullable length");
+        }
+        int length = buffer.getInt();
+        if (length < 0) {
+            return null;
+        }
+        if (buffer.remaining() < length) {
+            throw new ProtocolDecodeException("Truncated byte payload");
+        }
+        byte[] value = new byte[length];
+        buffer.get(value);
+        return value;
+    }
+
+    private static int nullableLength(byte[] bytes) {
+        return bytes == null ? 4 : 4 + bytes.length;
+    }
+
+    private static int headerBytes(Map<String, byte[]> headers) {
+        int size = 2;
+        if (headers == null || headers.isEmpty()) {
+            return size;
+        }
+        for (Map.Entry<String, byte[]> entry : headers.entrySet()) {
+            byte[] key = utf8(entry.getKey());
+            byte[] value = entry.getValue() == null ? new byte[0] : entry.getValue();
+            size += 2 + key.length + 2 + value.length;
+        }
+        return size;
+    }
+
+    private static void putHeaders(ByteBuffer buffer, Map<String, byte[]> headers) {
+        if (headers == null || headers.isEmpty()) {
+            buffer.putShort((short) 0);
+            return;
+        }
+        if (headers.size() > Short.MAX_VALUE) {
+            throw new ProtocolDecodeException("Too many headers");
+        }
+        buffer.putShort((short) headers.size());
+        for (Map.Entry<String, byte[]> entry : headers.entrySet()) {
+            byte[] key = utf8(entry.getKey());
+            byte[] value = entry.getValue() == null ? new byte[0] : entry.getValue();
+            if (key.length > Short.MAX_VALUE || value.length > Short.MAX_VALUE) {
+                throw new ProtocolDecodeException("Header entry too large");
+            }
+            buffer.putShort((short) key.length);
+            buffer.put(key);
+            buffer.putShort((short) value.length);
+            buffer.put(value);
+        }
+    }
+
+    private static Map<String, byte[]> readHeaders(ByteBuffer buffer) {
+        if (buffer.remaining() < 2) {
+            throw new ProtocolDecodeException("Truncated header count");
+        }
+        int count = buffer.getShort() & 0xFFFF;
+        if (count == 0) {
+            return Map.of();
+        }
+        Map<String, byte[]> headers = new HashMap<>();
+        for (int i = 0; i < count; i++) {
+            headers.put(readShortUtf8(buffer, "header key"), readShortBytes(buffer, "header value"));
+        }
+        return Map.copyOf(headers);
+    }
+
+    private static String readShortUtf8(ByteBuffer buffer, String field) {
+        byte[] bytes = readShortBytes(buffer, field);
+        return new String(bytes, StandardCharsets.UTF_8);
+    }
+
+    private static byte[] readShortBytes(ByteBuffer buffer, String field) {
+        if (buffer.remaining() < 2) {
+            throw new ProtocolDecodeException("Truncated " + field + " length");
+        }
+        int length = buffer.getShort() & 0xFFFF;
+        if (buffer.remaining() < length) {
+            throw new ProtocolDecodeException("Truncated " + field);
+        }
+        byte[] value = new byte[length];
+        buffer.get(value);
+        return value;
+    }
+
+    private static byte[] utf8(String value) {
+        return value.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static void ensureConsumed(ByteBuffer buffer) {
+        if (buffer.hasRemaining()) {
+            throw new ProtocolDecodeException("Trailing bytes in payload (" + buffer.remaining() + " left)");
+        }
+    }
+
+    private static byte[] toByteArray(ByteBuffer buffer) {
+        byte[] out = new byte[buffer.position()];
+        buffer.flip();
+        buffer.get(out);
+        return out;
+    }
+}
