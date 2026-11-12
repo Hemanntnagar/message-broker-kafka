@@ -10,9 +10,14 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class ClusterPartitionLeadership implements PartitionLeader {
 
     private final AtomicReference<ClusterManager> clusterManager = new AtomicReference<>();
+    private final PartitionLeaderEpochRegistry epochRegistry = new PartitionLeaderEpochRegistry();
 
     public void attach(ClusterManager manager) {
         clusterManager.set(Objects.requireNonNull(manager));
+    }
+
+    public PartitionLeaderEpochRegistry epochRegistry() {
+        return epochRegistry;
     }
 
     @Override
@@ -36,6 +41,11 @@ public final class ClusterPartitionLeadership implements PartitionLeader {
         if (manager == null) {
             return true;
         }
-        return manager.assignment(partition).map(a -> a.leaderId() == localBrokerId).orElse(true);
+        return manager.assignment(partition)
+                .map(
+                        a ->
+                                a.leaderId() == localBrokerId
+                                        && epochRegistry.epoch(partition) >= a.leaderEpoch())
+                .orElse(true);
     }
 }

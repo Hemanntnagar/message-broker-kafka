@@ -52,6 +52,10 @@ public final class FileMessageLog implements MessageLog {
             return offset;
         } catch (IOException e) {
             offsetManager.undoLastAssign();
+            if (isDiskFull(e)) {
+                throw new com.javastream.storage.DiskFullException(
+                        "No space left on device for partition log at " + partitionDirectory, e);
+            }
             throw new LogStorageException("Failed to append to partition log at " + partitionDirectory, e);
         }
     }
@@ -253,5 +257,17 @@ public final class FileMessageLog implements MessageLog {
             throw new LogStorageException("Unexpected segment file name: " + logFile);
         }
         return Integer.parseInt(matcher.group(1));
+    }
+
+    private static boolean isDiskFull(IOException e) {
+        String message = e.getMessage();
+        if (message != null) {
+            String lower = message.toLowerCase();
+            if (lower.contains("no space left on device") || lower.contains("enospc")) {
+                return true;
+            }
+        }
+        Throwable cause = e.getCause();
+        return cause instanceof IOException && isDiskFull((IOException) cause);
     }
 }

@@ -138,6 +138,13 @@ public final class ClusterRuntime implements AutoCloseable {
         return interBrokerServer;
     }
 
+    public void gracefulClusterShutdown() {
+        ClusterMemberSession session = memberSession;
+        if (session != null) {
+            session.leaveCluster();
+        }
+    }
+
     @Override
     public void close() {
         ClusterMemberSession session = memberSession;

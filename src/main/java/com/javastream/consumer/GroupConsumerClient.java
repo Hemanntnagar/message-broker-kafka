@@ -220,8 +220,10 @@ public final class GroupConsumerClient implements AutoCloseable {
     @Override
     public void close() throws IOException {
         try {
-            leaveGroup();
-        } catch (IOException ignored) {
+            if (connection.isConnected()) {
+                leaveGroup();
+            }
+        } catch (Exception ignored) {
             // best effort while closing
         }
         disconnect();

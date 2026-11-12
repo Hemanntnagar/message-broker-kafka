@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -30,9 +31,11 @@ public final class ClusterManager {
     private final ClusterMembership membership;
     private final boolean coordinator;
 
-    private final ConcurrentHashMap<Integer, BrokerEndpoint> brokers = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<Integer, Long> lastHeartbeatMillis = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, BrokerSession> sessions = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<PartitionId, PartitionReplicaAssignment> assignments = new ConcurrentHashMap<>();
+    private final BrokerReachabilityProbe reachabilityProbe = new BrokerReachabilityProbe(500);
+    /** Heartbeat loss beyond session timeout is suspicion only until probes fail or this factor elapses. */
+    private static final int EXPIRY_CONFIRMATION_FACTOR = 2;
     private final ConcurrentHashMap<String, Integer> topicCatalog = new ConcurrentHashMap<>();
     private final CopyOnWriteArrayList<Runnable> assignmentListeners = new CopyOnWriteArrayList<>();
 
@@ -65,8 +68,8 @@ public final class ClusterManager {
         if (!coordinator) {
             throw new IllegalStateException("Only coordinator broker may accept registrations");
         }
-        brokers.put(endpoint.brokerId(), endpoint);
-        lastHeartbeatMillis.put(endpoint.brokerId(), System.currentTimeMillis());
+        long now = System.currentTimeMillis();
+        sessions.put(endpoint.brokerId(), new BrokerSession(endpoint, now));
         membership.register(endpoint.id());
         log.info("Registered broker {} at {}:{} (replication {})", endpoint.brokerId(), endpoint.host(), endpoint.clientPort(), endpoint.replicationPort());
         rebalanceLeadersOnMembershipChange();
@@ -76,13 +79,39 @@ public final class ClusterManager {
     }
 
     public void heartbeat(int brokerId) {
+        heartbeat(brokerId, List.of());
+    }
+
+    public void heartbeat(int brokerId, List<InterBrokerCodec.PartitionLogEndReport> logEnds) {
         if (!coordinator) {
             throw new IllegalStateException("Only coordinator broker may accept heartbeats");
         }
-        if (!brokers.containsKey(brokerId)) {
+        BrokerSession session = sessions.get(brokerId);
+        if (session == null) {
             throw new IllegalArgumentException("Unknown broker " + brokerId);
         }
-        lastHeartbeatMillis.put(brokerId, System.currentTimeMillis());
+        long now = System.currentTimeMillis();
+        session.lastHeartbeatMillis = now;
+        session.firstMissedHeartbeatMillis = 0;
+        session.consecutiveFailedProbes = 0;
+        session.state = BrokerSessionState.AVAILABLE;
+        for (InterBrokerCodec.PartitionLogEndReport report : logEnds) {
+            PartitionId partitionId = new PartitionId(new TopicName(report.topic()), report.partition());
+            session.reportedLogEnds.put(partitionId, report.logEndOffset());
+        }
+    }
+
+    public void voluntaryLeave(int brokerId) {
+        if (!coordinator) {
+            return;
+        }
+        if (brokerId == coordinatorBrokerId) {
+            return;
+        }
+        log.info("Broker {} left the cluster voluntarily", brokerId);
+        removeBrokerSession(brokerId);
+        rebalanceLeadersOnMembershipChange();
+        broadcastAssignments();
     }
 
     public void expireStaleBrokers() {
@@ -91,48 +120,99 @@ public final class ClusterManager {
         }
         long now = System.currentTimeMillis();
         List<Integer> expired = new ArrayList<>();
-        for (Map.Entry<Integer, Long> entry : lastHeartbeatMillis.entrySet()) {
-            if (now - entry.getValue() > sessionTimeoutMs) {
-                expired.add(entry.getKey());
-            }
-        }
-        for (int brokerId : expired) {
+        for (Map.Entry<Integer, BrokerSession> entry : sessions.entrySet()) {
+            int brokerId = entry.getKey();
             if (brokerId == coordinatorBrokerId) {
                 continue;
             }
-            log.warn("Broker {} expired from cluster membership", brokerId);
-            brokers.remove(brokerId);
-            lastHeartbeatMillis.remove(brokerId);
-            membership.deregister(new BrokerId(brokerId));
+            BrokerSession session = entry.getValue();
+            long sinceHeartbeat = now - session.lastHeartbeatMillis;
+            if (sinceHeartbeat <= sessionTimeoutMs) {
+                if (session.state != BrokerSessionState.AVAILABLE) {
+                    session.state = BrokerSessionState.AVAILABLE;
+                }
+                continue;
+            }
+            if (session.firstMissedHeartbeatMillis == 0) {
+                session.firstMissedHeartbeatMillis = session.lastHeartbeatMillis + sessionTimeoutMs;
+            }
+            session.state = BrokerSessionState.SUSPECTED_UNAVAILABLE;
+            boolean probeOk = reachabilityProbe.canConnect(session.endpoint);
+            if (probeOk) {
+                session.consecutiveFailedProbes = 0;
+                log.debug(
+                        "Broker {} past heartbeat deadline but replication port reachable — keeping as suspected",
+                        brokerId);
+                if (sinceHeartbeat >= sessionTimeoutMs * EXPIRY_CONFIRMATION_FACTOR) {
+                    session.state = BrokerSessionState.CONFIRMED_UNAVAILABLE;
+                    expired.add(brokerId);
+                }
+                continue;
+            }
+            session.consecutiveFailedProbes++;
+            if (session.consecutiveFailedProbes >= 2
+                    || sinceHeartbeat >= sessionTimeoutMs * EXPIRY_CONFIRMATION_FACTOR) {
+                session.state = BrokerSessionState.CONFIRMED_UNAVAILABLE;
+                expired.add(brokerId);
+            }
+        }
+        for (int brokerId : expired) {
+            log.warn("Broker {} confirmed unavailable — removing from cluster membership", brokerId);
+            removeBrokerSession(brokerId);
         }
         if (!expired.isEmpty()) {
             rebalanceLeadersOnMembershipChange();
         }
     }
 
+    private void removeBrokerSession(int brokerId) {
+        sessions.remove(brokerId);
+        membership.deregister(new BrokerId(brokerId));
+    }
+
     public Set<BrokerEndpoint> liveBrokers() {
-        return Set.copyOf(brokers.values());
+        List<BrokerEndpoint> endpoints = new ArrayList<>();
+        for (BrokerSession session : sessions.values()) {
+            if (session.state != BrokerSessionState.CONFIRMED_UNAVAILABLE) {
+                endpoints.add(session.endpoint);
+            }
+        }
+        return Set.copyOf(endpoints);
     }
 
     public Optional<BrokerEndpoint> broker(int brokerId) {
-        return Optional.ofNullable(brokers.get(brokerId));
+        BrokerSession session = sessions.get(brokerId);
+        if (session == null || session.state == BrokerSessionState.CONFIRMED_UNAVAILABLE) {
+            return Optional.empty();
+        }
+        return Optional.of(session.endpoint);
+    }
+
+    public Optional<BrokerSessionState> brokerState(int brokerId) {
+        BrokerSession session = sessions.get(brokerId);
+        return session == null ? Optional.empty() : Optional.of(session.state);
     }
 
     public void applyAssignments(InterBrokerCodec.AssignmentPush push) {
+        long now = System.currentTimeMillis();
         for (InterBrokerCodec.BrokerDirectoryEntry directoryEntry : push.brokers()) {
-            brokers.put(
-                    directoryEntry.brokerId(),
+            BrokerEndpoint endpoint =
                     new BrokerEndpoint(
                             directoryEntry.brokerId(),
                             directoryEntry.host(),
                             directoryEntry.clientPort(),
-                            directoryEntry.replicationPort()));
+                            directoryEntry.replicationPort());
+            sessions.compute(
+                    directoryEntry.brokerId(),
+                    (id, existing) ->
+                            existing == null ? new BrokerSession(endpoint, now) : existing.withEndpoint(endpoint));
         }
         for (InterBrokerCodec.PartitionAssignmentEntry entry : push.assignments()) {
             PartitionId partitionId = new PartitionId(new TopicName(entry.topic()), entry.partition());
             assignments.put(
                     partitionId,
-                    new PartitionReplicaAssignment(partitionId, entry.leaderId(), entry.replicaIds()));
+                    new PartitionReplicaAssignment(
+                            partitionId, entry.leaderId(), entry.replicaIds(), entry.leaderEpoch()));
         }
         notifyAssignmentListeners();
     }
@@ -150,7 +230,12 @@ public final class ClusterManager {
             return;
         }
         topicCatalog.put(topic.value(), partitionCount);
-        List<Integer> brokerIds = brokers.keySet().stream().sorted().toList();
+        List<Integer> brokerIds =
+                sessions.keySet().stream()
+                        .filter(id -> brokerState(id).orElse(BrokerSessionState.CONFIRMED_UNAVAILABLE)
+                                != BrokerSessionState.CONFIRMED_UNAVAILABLE)
+                        .sorted()
+                        .toList();
         if (brokerIds.isEmpty()) {
             return;
         }
@@ -171,7 +256,7 @@ public final class ClusterManager {
     }
 
     private void broadcastTopicCreated(TopicName topic, int partitionCount) {
-        sendTopicCreated(topic.value(), partitionCount, brokers.values());
+        sendTopicCreated(topic.value(), partitionCount, registeredEndpoints());
     }
 
     private void broadcastTopicCatalog(BrokerEndpoint target) {
@@ -201,7 +286,7 @@ public final class ClusterManager {
     private void broadcastAssignments() {
         InterBrokerCodec.AssignmentPush push = buildAssignmentPush();
         byte[] payload = InterBrokerCodec.encodeAssignmentPush(push);
-        for (BrokerEndpoint endpoint : brokers.values()) {
+        for (BrokerEndpoint endpoint : registeredEndpoints()) {
             if (endpoint.brokerId() == coordinatorBrokerId) {
                 continue;
             }
@@ -218,7 +303,7 @@ public final class ClusterManager {
 
     public InterBrokerCodec.AssignmentPush buildAssignmentPush() {
         List<InterBrokerCodec.BrokerDirectoryEntry> directory = new ArrayList<>();
-        for (BrokerEndpoint endpoint : brokers.values()) {
+        for (BrokerEndpoint endpoint : registeredEndpoints()) {
             directory.add(
                     new InterBrokerCodec.BrokerDirectoryEntry(
                             endpoint.brokerId(),
@@ -234,7 +319,8 @@ public final class ClusterManager {
                             id.topic().value(),
                             id.index(),
                             assignment.leaderId(),
-                            assignment.replicaIds()));
+                            assignment.replicaIds(),
+                            assignment.leaderEpoch()));
         }
         return new InterBrokerCodec.AssignmentPush(directory, entries);
     }
@@ -244,12 +330,20 @@ public final class ClusterManager {
         boolean changed = false;
         for (Map.Entry<PartitionId, PartitionReplicaAssignment> entry : assignments.entrySet()) {
             PartitionReplicaAssignment current = entry.getValue();
+            PartitionId partitionId = entry.getKey();
             if (!alive.contains(current.leaderId())) {
-                int newLeader = electLeader(current.replicaIds(), alive);
+                int newLeader = electLeaderConsistent(partitionId, current.replicaIds(), alive);
                 if (newLeader != current.leaderId()) {
-                    entry.setValue(new PartitionReplicaAssignment(entry.getKey(), newLeader, current.replicaIds()));
+                    long epoch = current.leaderEpoch() + 1;
+                    entry.setValue(
+                            new PartitionReplicaAssignment(partitionId, newLeader, current.replicaIds(), epoch));
                     changed = true;
-                    log.info("Failover: partition {} leader {} -> {}", entry.getKey(), current.leaderId(), newLeader);
+                    log.info(
+                            "Failover: partition {} leader {} -> {} (epoch {})",
+                            partitionId,
+                            current.leaderId(),
+                            newLeader,
+                            epoch);
                 }
             }
         }
@@ -260,10 +354,43 @@ public final class ClusterManager {
     }
 
     private Set<Integer> aliveBrokerIds() {
-        long now = System.currentTimeMillis();
-        return brokers.keySet().stream()
-                .filter(id -> now - lastHeartbeatMillis.getOrDefault(id, 0L) <= sessionTimeoutMs)
-                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        Set<Integer> alive = new HashSet<>();
+        for (Map.Entry<Integer, BrokerSession> entry : sessions.entrySet()) {
+            if (entry.getValue().state != BrokerSessionState.CONFIRMED_UNAVAILABLE) {
+                alive.add(entry.getKey());
+            }
+        }
+        return Set.copyOf(alive);
+    }
+
+    private List<BrokerEndpoint> registeredEndpoints() {
+        return sessions.values().stream().map(session -> session.endpoint).toList();
+    }
+
+    int electLeaderConsistent(PartitionId partitionId, List<Integer> replicaIds, Set<Integer> aliveBrokerIds) {
+        long maxLogEnd = 0;
+        for (int replicaId : replicaIds) {
+            BrokerSession session = sessions.get(replicaId);
+            if (session == null) {
+                continue;
+            }
+            maxLogEnd = Math.max(maxLogEnd, session.reportedLogEnds.getOrDefault(partitionId, 0L));
+        }
+        List<Integer> caughtUp = new ArrayList<>();
+        for (int replicaId : replicaIds) {
+            if (!aliveBrokerIds.contains(replicaId)) {
+                continue;
+            }
+            BrokerSession session = sessions.get(replicaId);
+            long end = session == null ? 0L : session.reportedLogEnds.getOrDefault(partitionId, 0L);
+            if (maxLogEnd == 0 || end >= maxLogEnd) {
+                caughtUp.add(replicaId);
+            }
+        }
+        if (!caughtUp.isEmpty()) {
+            return caughtUp.stream().min(Comparator.naturalOrder()).orElseThrow();
+        }
+        return electLeader(replicaIds, aliveBrokerIds);
     }
 
     /**

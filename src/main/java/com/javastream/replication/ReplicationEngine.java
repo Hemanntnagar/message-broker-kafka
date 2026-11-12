@@ -38,6 +38,10 @@ public final class ReplicationEngine {
         this.brokerServices = Objects.requireNonNull(brokerServices);
     }
 
+    public BrokerServices brokerServices() {
+        return brokerServices;
+    }
+
     public void syncAssignmentsFromCluster() {
         for (PartitionReplicaAssignment assignment : clusterManager.allAssignments()) {
             applyAssignment(assignment);
@@ -47,6 +51,9 @@ public final class ReplicationEngine {
     public void applyAssignment(PartitionReplicaAssignment assignment) {
         replicaManager.configureReplicas(
                 assignment.partitionId(), assignment.leaderId(), assignment.replicaIds());
+        brokerServices
+                .leadership()
+                .ifPresent(leadership -> leadership.epochRegistry().apply(assignment));
     }
 
     public void onTopicCreatedLocally(TopicName topic, int partitionCount) {
@@ -69,6 +76,16 @@ public final class ReplicationEngine {
         if (assignment == null || assignment.leaderId() != localBrokerId) {
             return;
         }
+        long fencingEpoch = assignment.leaderEpoch();
+        brokerServices
+                .leadership()
+                .ifPresent(
+                        leadership -> {
+                            if (leadership.epochRegistry().epoch(partitionId) < fencingEpoch) {
+                                throw new IllegalStateException(
+                                        "Fenced leader cannot replicate on " + partitionId);
+                            }
+                        });
         replicaManager.recordLeaderAppend(partitionId, offset);
         for (int replicaId : assignment.replicaIds()) {
             if (replicaId == localBrokerId) {
@@ -89,7 +106,8 @@ public final class ReplicationEngine {
                             timestampEpochMillis,
                             key,
                             value,
-                            headers);
+                            headers,
+                            fencingEpoch);
             try {
                 InterBrokerClient client = new InterBrokerClient(endpoint.host(), endpoint.replicationPort(), 2_000, 10_000);
                 InterBrokerCodec.ReplicateRecordResponse response = client.replicate(request);
@@ -109,6 +127,17 @@ public final class ReplicationEngine {
     public void applyReplicatedRecord(InterBrokerCodec.ReplicateRecordRequest request) {
         TopicName topic = new TopicName(request.topic());
         PartitionId partitionId = new PartitionId(topic, request.partition());
+        PartitionReplicaAssignment assignment =
+                clusterManager.assignment(partitionId).orElse(null);
+        if (assignment != null
+                && request.leaderEpoch() > 0
+                && request.leaderEpoch() < assignment.leaderEpoch()) {
+            throw new IllegalStateException(
+                    "Rejecting replicate from stale leader epoch "
+                            + request.leaderEpoch()
+                            + " < "
+                            + assignment.leaderEpoch());
+        }
         if (brokerServices.partitionCount(topic).isEmpty()) {
             throw new IllegalStateException("Replica received record for unknown topic " + topic);
         }

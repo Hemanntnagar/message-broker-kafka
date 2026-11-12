@@ -6,6 +6,12 @@ import com.javastream.replication.interbroker.InterBrokerCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.javastream.cluster.BrokerRecoveryCoordinator;
+import com.javastream.partition.PartitionId;
+import com.javastream.topic.TopicName;
+
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Registers this broker with the coordinator and sends periodic cluster heartbeats. */
@@ -45,8 +51,7 @@ public final class ClusterMemberSession implements AutoCloseable {
         registerWithCoordinator();
         clusterManager.addAssignmentListener(replicationEngine::syncAssignmentsFromCluster);
         clusterManager.addAssignmentListener(replicationEngine::catchUpAllAssignedFollowers);
-        replicationEngine.syncAssignmentsFromCluster();
-        replicationEngine.catchUpAllAssignedFollowers();
+        BrokerRecoveryCoordinator.onBrokerStarted(replicationEngine, replicationEngine.brokerServices());
         heartbeatThread = Thread.ofVirtual().name("cluster-heartbeat-" + self.brokerId()).start(this::heartbeatLoop);
     }
 
@@ -88,11 +93,39 @@ public final class ClusterMemberSession implements AutoCloseable {
 
     private void sendHeartbeat() throws Exception {
         if (self.brokerId() == clusterManager.coordinatorBrokerId()) {
-            clusterManager.heartbeat(self.brokerId());
+            clusterManager.heartbeat(self.brokerId(), collectLogEndReports());
             return;
         }
         InterBrokerClient client = new InterBrokerClient(coordinatorHost, coordinatorReplicationPort, 2_000, 5_000);
-        client.heartbeat(new InterBrokerCodec.HeartbeatRequest(self.brokerId()));
+        client.heartbeat(new InterBrokerCodec.HeartbeatRequest(self.brokerId(), collectLogEndReports()));
+    }
+
+    private List<InterBrokerCodec.PartitionLogEndReport> collectLogEndReports() {
+        List<InterBrokerCodec.PartitionLogEndReport> reports = new ArrayList<>();
+        for (PartitionReplicaAssignment assignment : clusterManager.allAssignments()) {
+            if (!assignment.replicaIds().contains(self.brokerId())) {
+                continue;
+            }
+            PartitionId partitionId = assignment.partitionId();
+            long end = replicationEngine.followerLogEndOffset(partitionId);
+            reports.add(
+                    new InterBrokerCodec.PartitionLogEndReport(
+                            partitionId.topic().value(), partitionId.index(), end));
+        }
+        return reports;
+    }
+
+    public void leaveCluster() {
+        if (self.brokerId() == clusterManager.coordinatorBrokerId()) {
+            return;
+        }
+        try {
+            InterBrokerClient client =
+                    new InterBrokerClient(coordinatorHost, coordinatorReplicationPort, 2_000, 5_000);
+            client.deregister(self.brokerId());
+        } catch (Exception e) {
+            log.debug("Graceful cluster deregister failed for broker {}: {}", self.brokerId(), e.toString());
+        }
     }
 
     @Override

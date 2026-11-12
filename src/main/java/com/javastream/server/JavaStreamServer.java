@@ -50,6 +50,9 @@ public final class JavaStreamServer implements ServerLifecycle {
             return;
         }
         log.info("Stopping JavaStream broker (brokerId={})", config.brokerId());
+        if (brokerNode instanceof ClusterBrokerNode clusterNode) {
+            clusterNode.runtime().gracefulClusterShutdown();
+        }
         brokerNode.stop();
         log.info("JavaStream broker stopped");
     }

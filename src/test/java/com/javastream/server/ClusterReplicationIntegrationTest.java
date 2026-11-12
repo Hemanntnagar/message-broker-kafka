@@ -67,18 +67,19 @@ class ClusterReplicationIntegrationTest {
         restarted.runtime().replicationEngine().catchUpAllAssignedFollowers();
         assertRecordPresent(restarted, "events", 0, 1, "m-after-stop");
 
-        Optional<PartitionReplicaAssignment> beforeFailover =
-                coordinator.runtime().clusterManager().assignment(new PartitionId(new TopicName("events"), 1));
-        assertTrue(beforeFailover.isPresent());
-        assertEquals(1, beforeFailover.get().leaderId());
+        PartitionId partitionOne = new PartitionId(new TopicName("events"), 1);
+        Optional<PartitionReplicaAssignment> beforeSecondStop =
+                coordinator.runtime().clusterManager().assignment(partitionOne);
+        assertTrue(beforeSecondStop.isPresent());
+        assertEquals(1, beforeSecondStop.get().leaderId());
 
         broker1 = restarted;
         broker1.stop();
         brokers.remove(broker1);
-        Thread.sleep(3_500);
+        Thread.sleep(4_500);
 
         Optional<PartitionReplicaAssignment> afterFailover =
-                coordinator.runtime().clusterManager().assignment(new PartitionId(new TopicName("events"), 1));
+                coordinator.runtime().clusterManager().assignment(partitionOne);
         assertTrue(afterFailover.isPresent());
         assertFalse(afterFailover.get().leaderId() == 1, "partition 1 leader should fail over");
 

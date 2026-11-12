@@ -32,6 +32,7 @@ public final class InterBrokerRequestHandler {
             case REPLICA_FETCH -> handleReplicaFetch(payload);
             case TOPIC_CREATED -> handleTopicCreated(payload);
             case ASSIGNMENT_PUSH -> handleAssignmentPush(payload);
+            case BROKER_DEREGISTER -> handleDeregister(payload);
         };
     }
 
@@ -51,7 +52,13 @@ public final class InterBrokerRequestHandler {
 
     private byte[] handleHeartbeat(byte[] payload) {
         InterBrokerCodec.HeartbeatRequest request = InterBrokerCodec.decodeHeartbeat(payload);
-        clusterManager.heartbeat(request.brokerId());
+        clusterManager.heartbeat(request.brokerId(), request.logEnds());
+        return new byte[0];
+    }
+
+    private byte[] handleDeregister(byte[] payload) {
+        int brokerId = InterBrokerCodec.decodeDeregister(payload);
+        clusterManager.voluntaryLeave(brokerId);
         return new byte[0];
     }
 

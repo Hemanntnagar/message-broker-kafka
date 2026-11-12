@@ -4,8 +4,13 @@ import com.javastream.partition.PartitionId;
 
 import java.util.List;
 
-/** Leader and follower replica set for one partition. */
-public record PartitionReplicaAssignment(PartitionId partitionId, int leaderId, List<Integer> replicaIds) {
+/** Leader, follower replica set, and monotonic leader epoch for one partition. */
+public record PartitionReplicaAssignment(
+        PartitionId partitionId, int leaderId, List<Integer> replicaIds, long leaderEpoch) {
+
+    public PartitionReplicaAssignment(PartitionId partitionId, int leaderId, List<Integer> replicaIds) {
+        this(partitionId, leaderId, replicaIds, 1L);
+    }
 
     public PartitionReplicaAssignment {
         if (leaderId < 0) {
@@ -16,6 +21,9 @@ public record PartitionReplicaAssignment(PartitionId partitionId, int leaderId, 
         }
         if (!replicaIds.contains(leaderId)) {
             throw new IllegalArgumentException("leader must be a member of replicaIds");
+        }
+        if (leaderEpoch < 1) {
+            throw new IllegalArgumentException("leaderEpoch must be >= 1");
         }
         replicaIds = List.copyOf(replicaIds);
     }

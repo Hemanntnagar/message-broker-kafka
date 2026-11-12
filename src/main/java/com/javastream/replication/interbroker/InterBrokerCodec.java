@@ -16,7 +16,14 @@ public final class InterBrokerCodec {
 
     public record RegisterRequest(int brokerId, String host, int clientPort, int replicationPort) {}
 
-    public record HeartbeatRequest(int brokerId) {}
+    public record HeartbeatRequest(int brokerId, List<PartitionLogEndReport> logEnds) {
+
+        public HeartbeatRequest(int brokerId) {
+            this(brokerId, List.of());
+        }
+    }
+
+    public record PartitionLogEndReport(String topic, int partition, long logEndOffset) {}
 
     public record ReplicateRecordRequest(
             String topic,
@@ -26,7 +33,21 @@ public final class InterBrokerCodec {
             long timestampEpochMillis,
             byte[] key,
             byte[] value,
-            Map<String, byte[]> headers) {}
+            Map<String, byte[]> headers,
+            long leaderEpoch) {
+
+        public ReplicateRecordRequest(
+                String topic,
+                int partition,
+                long messageId,
+                long offset,
+                long timestampEpochMillis,
+                byte[] key,
+                byte[] value,
+                Map<String, byte[]> headers) {
+            this(topic, partition, messageId, offset, timestampEpochMillis, key, value, headers, 0L);
+        }
+    }
 
     public record ReplicateRecordResponse(long replicaLogEndOffset) {}
 
@@ -34,7 +55,13 @@ public final class InterBrokerCodec {
 
     public record TopicCreatedNotification(String topic, int partitionCount) {}
 
-    public record PartitionAssignmentEntry(String topic, int partition, int leaderId, List<Integer> replicaIds) {}
+    public record PartitionAssignmentEntry(
+            String topic, int partition, int leaderId, List<Integer> replicaIds, long leaderEpoch) {
+
+        public PartitionAssignmentEntry(String topic, int partition, int leaderId, List<Integer> replicaIds) {
+            this(topic, partition, leaderId, replicaIds, 1L);
+        }
+    }
 
     public record BrokerDirectoryEntry(int brokerId, String host, int clientPort, int replicationPort) {}
 
@@ -67,11 +94,49 @@ public final class InterBrokerCodec {
     }
 
     public static byte[] encodeHeartbeat(HeartbeatRequest request) {
-        return ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(request.brokerId()).array();
+        int size = 4 + 4;
+        for (PartitionLogEndReport report : request.logEnds()) {
+            size += 2 + report.topic().getBytes(StandardCharsets.UTF_8).length + 4 + 8;
+        }
+        ByteBuffer buffer = ByteBuffer.allocate(size).order(ByteOrder.BIG_ENDIAN);
+        buffer.putInt(request.brokerId());
+        buffer.putInt(request.logEnds().size());
+        for (PartitionLogEndReport report : request.logEnds()) {
+            byte[] topicBytes = report.topic().getBytes(StandardCharsets.UTF_8);
+            buffer.putShort((short) topicBytes.length);
+            buffer.put(topicBytes);
+            buffer.putInt(report.partition());
+            buffer.putLong(report.logEndOffset());
+        }
+        return buffer.array();
     }
 
     public static HeartbeatRequest decodeHeartbeat(byte[] payload) {
-        return new HeartbeatRequest(ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN).getInt());
+        ByteBuffer buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN);
+        int brokerId = buffer.getInt();
+        if (!buffer.hasRemaining()) {
+            return new HeartbeatRequest(brokerId);
+        }
+        int count = buffer.getInt();
+        List<PartitionLogEndReport> reports = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            int topicLen = buffer.getShort() & 0xFFFF;
+            byte[] topicBytes = new byte[topicLen];
+            buffer.get(topicBytes);
+            int partition = buffer.getInt();
+            long logEnd = buffer.getLong();
+            reports.add(
+                    new PartitionLogEndReport(new String(topicBytes, StandardCharsets.UTF_8), partition, logEnd));
+        }
+        return new HeartbeatRequest(brokerId, List.copyOf(reports));
+    }
+
+    public static byte[] encodeDeregister(int brokerId) {
+        return ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(brokerId).array();
+    }
+
+    public static int decodeDeregister(byte[] payload) {
+        return ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN).getInt();
     }
 
     public static byte[] encodeReplicate(ReplicateRecordRequest request) {
@@ -90,7 +155,8 @@ public final class InterBrokerCodec {
                                         + 4
                                         + nullableLen(request.value())
                                         + 2
-                                        + headerSize)
+                                        + headerSize
+                                        + 8)
                         .order(ByteOrder.BIG_ENDIAN);
         buffer.putShort((short) topicBytes.length);
         buffer.put(topicBytes);
@@ -101,6 +167,7 @@ public final class InterBrokerCodec {
         putNullable(buffer, request.key());
         putNullable(buffer, request.value());
         putHeaders(buffer, request.headers());
+        buffer.putLong(request.leaderEpoch());
         return buffer.array();
     }
 
@@ -116,6 +183,7 @@ public final class InterBrokerCodec {
         byte[] key = readNullable(buffer);
         byte[] value = readNullable(buffer);
         Map<String, byte[]> headers = readHeaders(buffer);
+        long leaderEpoch = buffer.hasRemaining() ? buffer.getLong() : 0L;
         return new ReplicateRecordRequest(
                 new String(topicBytes, StandardCharsets.UTF_8),
                 partition,
@@ -124,7 +192,8 @@ public final class InterBrokerCodec {
                 timestamp,
                 key,
                 value,
-                headers);
+                headers,
+                leaderEpoch);
     }
 
     public static byte[] encodeReplicateResponse(ReplicateRecordResponse response) {
@@ -217,7 +286,7 @@ public final class InterBrokerCodec {
         size += 4;
         for (PartitionAssignmentEntry entry : push.assignments()) {
             byte[] topicBytes = entry.topic().getBytes(StandardCharsets.UTF_8);
-            size += 2 + topicBytes.length + 4 + 4 + 4 + entry.replicaIds().size() * 4;
+            size += 2 + topicBytes.length + 4 + 4 + 4 + 8 + entry.replicaIds().size() * 4;
         }
         ByteBuffer buffer = ByteBuffer.allocate(size).order(ByteOrder.BIG_ENDIAN);
         buffer.putInt(push.brokers().size());
@@ -240,6 +309,7 @@ public final class InterBrokerCodec {
             for (int replicaId : entry.replicaIds()) {
                 buffer.putInt(replicaId);
             }
+            buffer.putLong(entry.leaderEpoch());
         }
         return buffer.array();
     }
@@ -272,9 +342,14 @@ public final class InterBrokerCodec {
             for (int r = 0; r < replicaCount; r++) {
                 replicas.add(buffer.getInt());
             }
+            long leaderEpoch = buffer.hasRemaining() ? buffer.getLong() : 1L;
             entries.add(
                     new PartitionAssignmentEntry(
-                            new String(topicBytes, StandardCharsets.UTF_8), partition, leaderId, replicas));
+                            new String(topicBytes, StandardCharsets.UTF_8),
+                            partition,
+                            leaderId,
+                            replicas,
+                            leaderEpoch));
         }
         return new AssignmentPush(List.copyOf(brokers), List.copyOf(entries));
     }

@@ -7,7 +7,8 @@ public enum InterBrokerOperation {
     REPLICATE_RECORD(3),
     REPLICA_FETCH(4),
     TOPIC_CREATED(5),
-    ASSIGNMENT_PUSH(6);
+    ASSIGNMENT_PUSH(6),
+    BROKER_DEREGISTER(7);
 
     private final short wire;
 

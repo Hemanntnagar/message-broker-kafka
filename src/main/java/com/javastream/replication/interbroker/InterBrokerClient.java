@@ -59,6 +59,10 @@ public final class InterBrokerClient implements AutoCloseable {
         rpc(InterBrokerOperation.BROKER_HEARTBEAT, InterBrokerCodec.encodeHeartbeat(request));
     }
 
+    public void deregister(int brokerId) throws IOException {
+        rpc(InterBrokerOperation.BROKER_DEREGISTER, InterBrokerCodec.encodeDeregister(brokerId));
+    }
+
     public InterBrokerCodec.ReplicateRecordResponse replicate(InterBrokerCodec.ReplicateRecordRequest request)
             throws IOException {
         byte[] payload =

@@ -48,6 +48,7 @@ public final class ClusterBrokerNode implements BrokerNode {
     @Override
     public void stop() {
         if (started.compareAndSet(true, false)) {
+            runtime.brokerServices().messageStore().flush();
             brokerServer.stop();
             runtime.close();
             runtime.brokerServices().close();
