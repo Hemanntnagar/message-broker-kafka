@@ -4,7 +4,10 @@ import com.javastream.partition.PartitionId;
 import com.javastream.partition.PartitionMetadataStore;
 import com.javastream.config.JavaStreamConfig;
 import com.javastream.config.ConfigLoader;
+import com.javastream.delivery.ProduceAcknowledgementService;
+import com.javastream.delivery.ProducerIdempotencyCache;
 import com.javastream.group.ConsumerGroupManager;
+import com.javastream.replication.SingleBrokerReplicaManager;
 import com.javastream.storage.BrokerMessageStore;
 import com.javastream.storage.FileMessageStore;
 import com.javastream.storage.InMemoryMessageStore;
@@ -27,6 +30,8 @@ public final class BrokerServices {
     private final TopicManager topicManager;
     private final BrokerMessageStore messageStore;
     private final ConsumerGroupManager consumerGroupManager;
+    private final ProducerIdempotencyCache producerIdempotencyCache = new ProducerIdempotencyCache();
+    private final ProduceAcknowledgementService produceAcknowledgementService;
     private final ConcurrentHashMap<PartitionId, Long> committedOffsets = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<PartitionId, Object> partitionLocks = new ConcurrentHashMap<>();
 
@@ -58,11 +63,17 @@ public final class BrokerServices {
     }
 
     public BrokerServices(BrokerMessageStore messageStore, int defaultPartitionCount) {
+        this(messageStore, defaultPartitionCount, 0);
+    }
+
+    public BrokerServices(BrokerMessageStore messageStore, int defaultPartitionCount, int brokerId) {
         this.messageStore = messageStore;
         this.topicManager =
                 new TopicManager(defaultPartitionCount, new PartitionMetadataStore(), messageStore);
         this.consumerGroupManager =
                 new ConsumerGroupManager(this::partitionCount, consumerOffsetCatalogPath(messageStore));
+        this.produceAcknowledgementService =
+                new ProduceAcknowledgementService(new SingleBrokerReplicaManager(brokerId), brokerId);
         if (messageStore instanceof FileMessageStore fileStore) {
             restoreTopicsFromCatalog(fileStore);
         }
@@ -91,17 +102,24 @@ public final class BrokerServices {
     }
 
     BrokerServices(TopicManager topicManager, BrokerMessageStore messageStore) {
-        this.topicManager = topicManager;
-        this.messageStore = messageStore;
-        this.consumerGroupManager =
-                new ConsumerGroupManager(this::partitionCount, consumerOffsetCatalogPath(messageStore));
+        this(topicManager, messageStore, new ConsumerGroupManager(topicManager::partitionCount, null), 0);
     }
 
     BrokerServices(
             TopicManager topicManager, BrokerMessageStore messageStore, ConsumerGroupManager consumerGroupManager) {
+        this(topicManager, messageStore, consumerGroupManager, 0);
+    }
+
+    BrokerServices(
+            TopicManager topicManager,
+            BrokerMessageStore messageStore,
+            ConsumerGroupManager consumerGroupManager,
+            int brokerId) {
         this.topicManager = topicManager;
         this.messageStore = messageStore;
         this.consumerGroupManager = consumerGroupManager;
+        this.produceAcknowledgementService =
+                new ProduceAcknowledgementService(new SingleBrokerReplicaManager(brokerId), brokerId);
     }
 
     private static Path consumerOffsetCatalogPath(BrokerMessageStore messageStore) {
@@ -122,6 +140,14 @@ public final class BrokerServices {
 
     public ConsumerGroupManager consumerGroupManager() {
         return consumerGroupManager;
+    }
+
+    public ProducerIdempotencyCache producerIdempotencyCache() {
+        return producerIdempotencyCache;
+    }
+
+    public ProduceAcknowledgementService produceAcknowledgementService() {
+        return produceAcknowledgementService;
     }
 
     public void registerTopic(TopicName name, int partitionCount) {

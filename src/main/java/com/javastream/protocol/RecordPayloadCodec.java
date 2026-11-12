@@ -1,5 +1,6 @@
 package com.javastream.protocol;
 
+import com.javastream.delivery.ProducerAckLevel;
 import com.javastream.exception.ProtocolDecodeException;
 
 import java.nio.ByteBuffer;
@@ -22,7 +23,27 @@ public final class RecordPayloadCodec {
             int partitionHint,
             byte[] key,
             byte[] value,
-            Map<String, byte[]> headers) {}
+            Map<String, byte[]> headers,
+            ProducerAckLevel ackLevel,
+            int requestTimeoutMillis,
+            long producerId,
+            long sequenceNumber) {
+
+        public ProduceRequest(String topic, int partitionHint, byte[] key, byte[] value, Map<String, byte[]> headers) {
+            this(
+                    topic,
+                    partitionHint,
+                    key,
+                    value,
+                    headers,
+                    ProducerAckLevel.ACK_LEADER,
+                    0,
+                    -1,
+                    0);
+        }
+    }
+
+    private static final int PRODUCE_DELIVERY_EXTENSION_BYTES = 1 + 4 + 8 + 8;
 
     public record ProduceResponse(long messageId, int partition, long offset) {}
 
@@ -74,14 +95,27 @@ public final class RecordPayloadCodec {
     public static byte[] encodeProduceRequest(ProduceRequest request) {
         byte[] topicBytes = utf8(request.topic());
         ByteBuffer buffer =
-                ByteBuffer.allocate(2 + topicBytes.length + 4 + 4 + nullableLength(request.key) + 4
-                                + nullableLength(request.value) + 2 + headerBytes(request.headers))
+                ByteBuffer.allocate(
+                                2
+                                        + topicBytes.length
+                                        + 4
+                                        + 4
+                                        + nullableLength(request.key())
+                                        + 4
+                                        + nullableLength(request.value())
+                                        + 2
+                                        + headerBytes(request.headers())
+                                        + PRODUCE_DELIVERY_EXTENSION_BYTES)
                         .order(ByteOrder.BIG_ENDIAN);
         putUtf8Topic(buffer, topicBytes);
         buffer.putInt(request.partitionHint());
         putNullableBytes(buffer, request.key());
         putNullableBytes(buffer, request.value());
         putHeaders(buffer, request.headers());
+        buffer.put(request.ackLevel().wireCode());
+        buffer.putInt(request.requestTimeoutMillis());
+        buffer.putLong(request.producerId());
+        buffer.putLong(request.sequenceNumber());
         return toByteArray(buffer);
     }
 
@@ -92,8 +126,19 @@ public final class RecordPayloadCodec {
         byte[] key = readNullableBytes(buffer);
         byte[] value = readNullableBytes(buffer);
         Map<String, byte[]> headers = readHeaders(buffer);
+        ProducerAckLevel ackLevel = ProducerAckLevel.ACK_LEADER;
+        int requestTimeoutMillis = 0;
+        long producerId = -1;
+        long sequenceNumber = 0;
+        if (buffer.remaining() >= PRODUCE_DELIVERY_EXTENSION_BYTES) {
+            ackLevel = ProducerAckLevel.fromWire(buffer.get());
+            requestTimeoutMillis = buffer.getInt();
+            producerId = buffer.getLong();
+            sequenceNumber = buffer.getLong();
+        }
         ensureConsumed(buffer);
-        return new ProduceRequest(topic, partitionHint, key, value, headers);
+        return new ProduceRequest(
+                topic, partitionHint, key, value, headers, ackLevel, requestTimeoutMillis, producerId, sequenceNumber);
     }
 
     public static byte[] encodeProduceResponse(ProduceResponse response) {

@@ -18,13 +18,14 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Synchronous TCP client for JavaStream v1 request/response pairs on a single connection.
  */
-public final class TcpProtocolConnection implements AutoCloseable {
+public class TcpProtocolConnection implements AutoCloseable {
 
     private final String host;
     private final int port;
@@ -71,11 +72,22 @@ public final class TcpProtocolConnection implements AutoCloseable {
     }
 
     public synchronized Response send(OperationCode operation, byte[] payload) throws IOException {
+        return send(operation, payload, null);
+    }
+
+    public synchronized Response send(OperationCode operation, byte[] payload, Duration requestTimeout)
+            throws IOException {
         if (!isConnected()) {
             throw new ClientNotConnectedException("Client is not connected to %s:%d".formatted(host, port));
         }
         int id = correlationId.getAndIncrement();
         Request request = new Request(ProtocolConstants.VERSION_1, id, operation, payload == null ? new byte[0] : payload);
+        int previousTimeout = socketTimeoutMillis;
+        Socket current = socket;
+        if (requestTimeout != null && current != null) {
+            int millis = Math.toIntExact(Math.min(Integer.MAX_VALUE, requestTimeout.toMillis()));
+            current.setSoTimeout(Math.max(1, millis));
+        }
         try {
             output.write(encoder.encodeRequest(request));
             output.flush();
@@ -93,6 +105,10 @@ public final class TcpProtocolConnection implements AutoCloseable {
         } catch (IOException e) {
             closeQuietly();
             throw e;
+        } finally {
+            if (requestTimeout != null && current != null && current.isConnected() && !current.isClosed()) {
+                current.setSoTimeout(previousTimeout);
+            }
         }
     }
 

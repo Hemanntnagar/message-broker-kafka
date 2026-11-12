@@ -67,6 +67,15 @@ Header size for both directions: **16 bytes**.
 | Value | `int32` length (`-1` = null) + bytes |
 | Headers | `uint16` count, then repeated (`uint16` key len + key + `uint16` value len + value) |
 
+**Delivery extension** (21 bytes, optional — omitted by legacy clients):
+
+| Field | Type |
+|-------|------|
+| Ack level | `int8` (`0` = none, `1` = leader, `2` = all ISR) |
+| Request timeout | `int32` millis (advisory) |
+| Producer ID | `int64` (`-1` = not idempotent) |
+| Sequence | `int64` (per producer, topic, partition; starts at `0`) |
+
 **OK response payload:** `uint64` messageId, `int32` partition, `int64` offset (20 bytes total).
 
 ### `FETCH` (5)

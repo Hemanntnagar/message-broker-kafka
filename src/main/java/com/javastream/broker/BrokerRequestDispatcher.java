@@ -1,5 +1,7 @@
 package com.javastream.broker;
 
+import com.javastream.delivery.IdempotentSequenceException;
+import com.javastream.delivery.ProducerIdempotencyCache;
 import com.javastream.exception.ProtocolDecodeException;
 import com.javastream.partition.PartitionId;
 import com.javastream.protocol.OperationCode;
@@ -57,6 +59,10 @@ public final class BrokerRequestDispatcher {
             log.debug("Malformed request payload: {}", e.getMessage());
             return new Response(
                     ProtocolConstants.VERSION_1, request.correlationId(), StatusCode.MALFORMED, new byte[0]);
+        } catch (IdempotentSequenceException e) {
+            log.debug("Idempotent produce rejected: {}", e.getMessage());
+            return new Response(
+                    ProtocolConstants.VERSION_1, request.correlationId(), StatusCode.BAD_REQUEST, new byte[0]);
         } catch (com.javastream.exception.JavaStreamException e) {
             log.debug("Bad request: {}", e.getMessage());
             return new Response(
@@ -127,6 +133,15 @@ public final class BrokerRequestDispatcher {
         }
         int partition = services.resolvePartition(topic, produce.partitionHint(), produce.key());
         PartitionId partitionId = new PartitionId(topic, partition);
+        ProducerIdempotencyCache idempotency = services.producerIdempotencyCache();
+        var duplicate =
+                idempotency.beginIdempotentAppend(produce.producerId(), partitionId, produce.sequenceNumber());
+        RecordPayloadCodec.ProduceResponse ack;
+        if (duplicate.isPresent()) {
+            ProducerIdempotencyCache.DedupResult cached = duplicate.get();
+            ack = new RecordPayloadCodec.ProduceResponse(cached.messageId(), cached.partition(), cached.offset());
+            return Response.ok(request.correlationId(), RecordPayloadCodec.encodeProduceResponse(ack));
+        }
         BrokerMessageStore.AppendResult append =
                 services.appendRecord(
                         partitionId,
@@ -134,8 +149,15 @@ public final class BrokerRequestDispatcher {
                         produce.value(),
                         produce.headers(),
                         System.currentTimeMillis());
-        RecordPayloadCodec.ProduceResponse ack =
-                new RecordPayloadCodec.ProduceResponse(append.messageId(), partition, append.offset());
+        idempotency.recordSuccessfulAppend(
+                produce.producerId(),
+                partitionId,
+                produce.sequenceNumber(),
+                append.messageId(),
+                append.offset());
+        services.produceAcknowledgementService()
+                .awaitAcknowledgement(produce.ackLevel(), services.messageStore(), partitionId);
+        ack = new RecordPayloadCodec.ProduceResponse(append.messageId(), partition, append.offset());
         return Response.ok(request.correlationId(), RecordPayloadCodec.encodeProduceResponse(ack));
     }
 
