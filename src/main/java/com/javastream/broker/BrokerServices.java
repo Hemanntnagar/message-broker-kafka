@@ -4,14 +4,17 @@ import com.javastream.partition.PartitionId;
 import com.javastream.partition.PartitionMetadataStore;
 import com.javastream.config.JavaStreamConfig;
 import com.javastream.config.ConfigLoader;
+import com.javastream.group.ConsumerGroupManager;
 import com.javastream.storage.BrokerMessageStore;
 import com.javastream.storage.FileMessageStore;
 import com.javastream.storage.InMemoryMessageStore;
+import com.javastream.storage.log.StorageLayout;
 import com.javastream.storage.log.StorageSettings;
 import com.javastream.topic.TopicManager;
 import com.javastream.topic.TopicMetadata;
 import com.javastream.topic.TopicName;
 
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -23,6 +26,7 @@ public final class BrokerServices {
 
     private final TopicManager topicManager;
     private final BrokerMessageStore messageStore;
+    private final ConsumerGroupManager consumerGroupManager;
     private final ConcurrentHashMap<PartitionId, Long> committedOffsets = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<PartitionId, Object> partitionLocks = new ConcurrentHashMap<>();
 
@@ -57,6 +61,8 @@ public final class BrokerServices {
         this.messageStore = messageStore;
         this.topicManager =
                 new TopicManager(defaultPartitionCount, new PartitionMetadataStore(), messageStore);
+        this.consumerGroupManager =
+                new ConsumerGroupManager(this::partitionCount, consumerOffsetCatalogPath(messageStore));
         if (messageStore instanceof FileMessageStore fileStore) {
             restoreTopicsFromCatalog(fileStore);
         }
@@ -80,12 +86,30 @@ public final class BrokerServices {
     }
 
     public void close() {
+        consumerGroupManager.close();
         messageStore.close();
     }
 
     BrokerServices(TopicManager topicManager, BrokerMessageStore messageStore) {
         this.topicManager = topicManager;
         this.messageStore = messageStore;
+        this.consumerGroupManager =
+                new ConsumerGroupManager(this::partitionCount, consumerOffsetCatalogPath(messageStore));
+    }
+
+    BrokerServices(
+            TopicManager topicManager, BrokerMessageStore messageStore, ConsumerGroupManager consumerGroupManager) {
+        this.topicManager = topicManager;
+        this.messageStore = messageStore;
+        this.consumerGroupManager = consumerGroupManager;
+    }
+
+    private static Path consumerOffsetCatalogPath(BrokerMessageStore messageStore) {
+        if (messageStore instanceof FileMessageStore fileStore) {
+            StorageLayout layout = new StorageLayout(fileStore.brokerRoot());
+            return layout.consumerOffsetsFile();
+        }
+        return null;
     }
 
     public TopicManager topicManager() {
@@ -94,6 +118,10 @@ public final class BrokerServices {
 
     public BrokerMessageStore messageStore() {
         return messageStore;
+    }
+
+    public ConsumerGroupManager consumerGroupManager() {
+        return consumerGroupManager;
     }
 
     public void registerTopic(TopicName name, int partitionCount) {

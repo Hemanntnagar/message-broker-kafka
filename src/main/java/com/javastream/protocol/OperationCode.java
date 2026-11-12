@@ -11,7 +11,12 @@ public enum OperationCode {
   FETCH(5),
   DELETE_TOPIC(6),
   GET_METADATA(7),
-  CONSUMER_ACK(8);
+  CONSUMER_ACK(8),
+  JOIN_GROUP(9),
+  HEARTBEAT(10),
+  LEAVE_GROUP(11),
+  COMMIT_OFFSETS(12),
+  FETCH_COMMITTED_OFFSETS(13);
 
   private final short wireValue;
 

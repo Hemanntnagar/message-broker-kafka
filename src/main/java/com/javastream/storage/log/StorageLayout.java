@@ -22,6 +22,10 @@ public final class StorageLayout {
         return metadataDirectory().resolve("topics.catalog");
     }
 
+    public Path consumerOffsetsFile() {
+        return metadataDirectory().resolve("consumer-offsets.catalog");
+    }
+
     public Path partitionDirectory(PartitionId partitionId) {
         TopicName topic = partitionId.topic();
         return brokerRoot

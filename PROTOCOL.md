@@ -42,6 +42,11 @@ Header size for both directions: **16 bytes**.
 | 6 | `DELETE_TOPIC` |
 | 7 | `GET_METADATA` |
 | 8 | `CONSUMER_ACK` |
+| 9 | `JOIN_GROUP` |
+| 10 | `HEARTBEAT` |
+| 11 | `LEAVE_GROUP` |
+| 12 | `COMMIT_OFFSETS` |
+| 13 | `FETCH_COMMITTED_OFFSETS` |
 
 ## Operation payloads (v1)
 
@@ -83,6 +88,46 @@ Header size for both directions: **16 bytes**.
 | Topic name | `uint16` length + UTF-8 |
 | Partition | `int32` |
 | Offset | `int64` |
+
+### `JOIN_GROUP` (9)
+
+| Field | Type |
+|-------|------|
+| Group ID | `uint16` length + UTF-8 |
+| Member ID | `uint16` length + UTF-8 |
+| Topic name | `uint16` length + UTF-8 |
+
+**OK response:** `int32` generation, `int32` assigned count + assigned partitions, `int32` revoked count + revoked partitions, `int32` committed count + repeated (`int32` partition, `int64` offset).
+
+### `HEARTBEAT` (10) / `LEAVE_GROUP` (11)
+
+| Field | Type |
+|-------|------|
+| Group ID | `uint16` length + UTF-8 |
+| Member ID | `uint16` length + UTF-8 |
+
+`LEAVE_GROUP` uses the same payload as `HEARTBEAT`. **OK response:** empty.
+
+### `COMMIT_OFFSETS` (12)
+
+| Field | Type |
+|-------|------|
+| Group ID | `uint16` length + UTF-8 |
+| Topic name | `uint16` length + UTF-8 |
+| Offset count | `int32` |
+| Offsets | repeated `int32` partition + `int64` offset |
+
+**OK response:** empty.
+
+### `FETCH_COMMITTED_OFFSETS` (13)
+
+| Field | Type |
+|-------|------|
+| Group ID | `uint16` length + UTF-8 |
+| Topic name | `uint16` length + UTF-8 |
+| Partition count | `int32` (+ partition indices; empty list = all partitions) |
+
+**OK response:** `int32` count + repeated (`int32` partition, `int64` offset). Missing commits use offset `-1`.
 
 ## Status codes (v1)
 

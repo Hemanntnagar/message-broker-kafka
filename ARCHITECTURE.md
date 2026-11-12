@@ -48,7 +48,7 @@ partition   leadership     coordinator   ReplicaManager
 | `topic` / `partition` | Naming & shard identity | Value types + registry interface |
 | `storage` | Append/read log | Interface only |
 | `producer` / `consumer` | Client APIs | Interfaces only |
-| `group` | Consumer groups | Interface only |
+| `group` | Consumer groups | `ConsumerGroupManager`, round-robin assignor, offset catalog |
 | `replication` | ISR / replicas | Interface only |
 | `cluster` | Membership, `BrokerId` | Interface only |
 | `metrics` | Observability hooks | Interface only |

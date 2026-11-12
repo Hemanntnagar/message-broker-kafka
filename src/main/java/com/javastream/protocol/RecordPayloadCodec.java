@@ -51,6 +51,26 @@ public final class RecordPayloadCodec {
 
     public record DeleteTopicRequest(String topic) {}
 
+    public record JoinGroupRequest(String groupId, String memberId, String topic) {}
+
+    public record JoinGroupResponse(
+            int generation,
+            List<Integer> assignedPartitions,
+            List<Integer> revokedPartitions,
+            List<CommittedOffsetEntry> committedOffsets) {}
+
+    public record HeartbeatRequest(String groupId, String memberId) {}
+
+    public record LeaveGroupRequest(String groupId, String memberId) {}
+
+    public record CommitOffsetsRequest(String groupId, String topic, List<CommittedOffsetEntry> offsets) {}
+
+    public record CommittedOffsetEntry(int partition, long offset) {}
+
+    public record FetchCommittedOffsetsRequest(String groupId, String topic, List<Integer> partitions) {}
+
+    public record FetchCommittedOffsetsResponse(List<CommittedOffsetEntry> offsets) {}
+
     public static byte[] encodeProduceRequest(ProduceRequest request) {
         byte[] topicBytes = utf8(request.topic());
         ByteBuffer buffer =
@@ -274,6 +294,183 @@ public final class RecordPayloadCodec {
         String topic = readUtf8Topic(buffer);
         ensureConsumed(buffer);
         return new DeleteTopicRequest(topic);
+    }
+
+    public static byte[] encodeJoinGroupRequest(JoinGroupRequest request) {
+        byte[] groupBytes = utf8(request.groupId());
+        byte[] memberBytes = utf8(request.memberId());
+        byte[] topicBytes = utf8(request.topic());
+        ByteBuffer buffer =
+                ByteBuffer.allocate(2 + groupBytes.length + 2 + memberBytes.length + 2 + topicBytes.length)
+                        .order(ByteOrder.BIG_ENDIAN);
+        putShortUtf8(buffer, groupBytes);
+        putShortUtf8(buffer, memberBytes);
+        putShortUtf8(buffer, topicBytes);
+        return toByteArray(buffer);
+    }
+
+    public static JoinGroupRequest decodeJoinGroupRequest(byte[] payload) {
+        ByteBuffer buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN);
+        String groupId = readShortUtf8(buffer, "group id");
+        String memberId = readShortUtf8(buffer, "member id");
+        String topic = readUtf8Topic(buffer);
+        ensureConsumed(buffer);
+        return new JoinGroupRequest(groupId, memberId, topic);
+    }
+
+    public static byte[] encodeJoinGroupResponse(JoinGroupResponse response) {
+        int size = 4 + 4 + 4 * response.assignedPartitions().size() + 4 + 4 * response.revokedPartitions().size();
+        size += 4 + response.committedOffsets().size() * (4 + 8);
+        ByteBuffer buffer = ByteBuffer.allocate(size).order(ByteOrder.BIG_ENDIAN);
+        buffer.putInt(response.generation());
+        putIntList(buffer, response.assignedPartitions());
+        putIntList(buffer, response.revokedPartitions());
+        putOffsetEntries(buffer, response.committedOffsets());
+        return toByteArray(buffer);
+    }
+
+    public static JoinGroupResponse decodeJoinGroupResponse(byte[] payload) {
+        ByteBuffer buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN);
+        int generation = buffer.getInt();
+        List<Integer> assigned = readIntList(buffer);
+        List<Integer> revoked = readIntList(buffer);
+        List<CommittedOffsetEntry> committed = readOffsetEntries(buffer);
+        ensureConsumed(buffer);
+        return new JoinGroupResponse(generation, assigned, revoked, committed);
+    }
+
+    public static byte[] encodeHeartbeatRequest(HeartbeatRequest request) {
+        byte[] groupBytes = utf8(request.groupId());
+        byte[] memberBytes = utf8(request.memberId());
+        ByteBuffer buffer =
+                ByteBuffer.allocate(2 + groupBytes.length + 2 + memberBytes.length).order(ByteOrder.BIG_ENDIAN);
+        putShortUtf8(buffer, groupBytes);
+        putShortUtf8(buffer, memberBytes);
+        return toByteArray(buffer);
+    }
+
+    public static HeartbeatRequest decodeHeartbeatRequest(byte[] payload) {
+        ByteBuffer buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN);
+        String groupId = readShortUtf8(buffer, "group id");
+        String memberId = readShortUtf8(buffer, "member id");
+        ensureConsumed(buffer);
+        return new HeartbeatRequest(groupId, memberId);
+    }
+
+    public static byte[] encodeLeaveGroupRequest(LeaveGroupRequest request) {
+        return encodeHeartbeatRequest(new HeartbeatRequest(request.groupId(), request.memberId()));
+    }
+
+    public static LeaveGroupRequest decodeLeaveGroupRequest(byte[] payload) {
+        HeartbeatRequest heartbeat = decodeHeartbeatRequest(payload);
+        return new LeaveGroupRequest(heartbeat.groupId(), heartbeat.memberId());
+    }
+
+    public static byte[] encodeCommitOffsetsRequest(CommitOffsetsRequest request) {
+        byte[] groupBytes = utf8(request.groupId());
+        byte[] topicBytes = utf8(request.topic());
+        int size = 2 + groupBytes.length + 2 + topicBytes.length + 4 + request.offsets().size() * (4 + 8);
+        ByteBuffer buffer = ByteBuffer.allocate(size).order(ByteOrder.BIG_ENDIAN);
+        putShortUtf8(buffer, groupBytes);
+        putUtf8Topic(buffer, topicBytes);
+        putOffsetEntries(buffer, request.offsets());
+        return toByteArray(buffer);
+    }
+
+    public static CommitOffsetsRequest decodeCommitOffsetsRequest(byte[] payload) {
+        ByteBuffer buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN);
+        String groupId = readShortUtf8(buffer, "group id");
+        String topic = readUtf8Topic(buffer);
+        List<CommittedOffsetEntry> offsets = readOffsetEntries(buffer);
+        ensureConsumed(buffer);
+        return new CommitOffsetsRequest(groupId, topic, offsets);
+    }
+
+    public static byte[] encodeFetchCommittedOffsetsRequest(FetchCommittedOffsetsRequest request) {
+        byte[] groupBytes = utf8(request.groupId());
+        byte[] topicBytes = utf8(request.topic());
+        int size = 2 + groupBytes.length + 2 + topicBytes.length + 4 + 4 * request.partitions().size();
+        ByteBuffer buffer = ByteBuffer.allocate(size).order(ByteOrder.BIG_ENDIAN);
+        putShortUtf8(buffer, groupBytes);
+        putUtf8Topic(buffer, topicBytes);
+        putIntList(buffer, request.partitions());
+        return toByteArray(buffer);
+    }
+
+    public static FetchCommittedOffsetsRequest decodeFetchCommittedOffsetsRequest(byte[] payload) {
+        ByteBuffer buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN);
+        String groupId = readShortUtf8(buffer, "group id");
+        String topic = readUtf8Topic(buffer);
+        List<Integer> partitions = readIntList(buffer);
+        ensureConsumed(buffer);
+        return new FetchCommittedOffsetsRequest(groupId, topic, partitions);
+    }
+
+    public static byte[] encodeFetchCommittedOffsetsResponse(FetchCommittedOffsetsResponse response) {
+        ByteBuffer buffer =
+                ByteBuffer.allocate(4 + response.offsets().size() * (4 + 8)).order(ByteOrder.BIG_ENDIAN);
+        putOffsetEntries(buffer, response.offsets());
+        return toByteArray(buffer);
+    }
+
+    public static FetchCommittedOffsetsResponse decodeFetchCommittedOffsetsResponse(byte[] payload) {
+        ByteBuffer buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN);
+        List<CommittedOffsetEntry> offsets = readOffsetEntries(buffer);
+        ensureConsumed(buffer);
+        return new FetchCommittedOffsetsResponse(offsets);
+    }
+
+    private static void putShortUtf8(ByteBuffer buffer, byte[] bytes) {
+        if (bytes.length > Short.MAX_VALUE) {
+            throw new ProtocolDecodeException("UTF-8 field too long");
+        }
+        buffer.putShort((short) bytes.length);
+        buffer.put(bytes);
+    }
+
+    private static void putIntList(ByteBuffer buffer, List<Integer> values) {
+        buffer.putInt(values.size());
+        for (int value : values) {
+            buffer.putInt(value);
+        }
+    }
+
+    private static List<Integer> readIntList(ByteBuffer buffer) {
+        if (buffer.remaining() < 4) {
+            throw new ProtocolDecodeException("Truncated int list length");
+        }
+        int count = buffer.getInt();
+        if (count < 0) {
+            throw new ProtocolDecodeException("Negative int list count: " + count);
+        }
+        List<Integer> values = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            values.add(buffer.getInt());
+        }
+        return List.copyOf(values);
+    }
+
+    private static void putOffsetEntries(ByteBuffer buffer, List<CommittedOffsetEntry> entries) {
+        buffer.putInt(entries.size());
+        for (CommittedOffsetEntry entry : entries) {
+            buffer.putInt(entry.partition());
+            buffer.putLong(entry.offset());
+        }
+    }
+
+    private static List<CommittedOffsetEntry> readOffsetEntries(ByteBuffer buffer) {
+        if (buffer.remaining() < 4) {
+            throw new ProtocolDecodeException("Truncated offset entry count");
+        }
+        int count = buffer.getInt();
+        if (count < 0) {
+            throw new ProtocolDecodeException("Negative offset entry count: " + count);
+        }
+        List<CommittedOffsetEntry> entries = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            entries.add(new CommittedOffsetEntry(buffer.getInt(), buffer.getLong()));
+        }
+        return List.copyOf(entries);
     }
 
     private static int recordSize(FetchedRecord record) {

@@ -79,6 +79,10 @@ public final class FileMessageStore implements BrokerMessageStore, AutoCloseable
         return topicCatalog.load();
     }
 
+    public Path brokerRoot() {
+        return layout.brokerRoot();
+    }
+
     public void recordTopic(TopicName name, int partitionCount) {
         topicCatalog.put(name.value(), partitionCount);
     }

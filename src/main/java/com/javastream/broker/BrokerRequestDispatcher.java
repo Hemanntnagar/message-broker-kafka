@@ -38,6 +38,11 @@ public final class BrokerRequestDispatcher {
                 case PRODUCE -> handleProduce(request);
                 case FETCH -> handleFetch(request);
                 case CONSUMER_ACK -> handleAck(request);
+                case JOIN_GROUP -> handleJoinGroup(request);
+                case HEARTBEAT -> handleHeartbeat(request);
+                case LEAVE_GROUP -> handleLeaveGroup(request);
+                case COMMIT_OFFSETS -> handleCommitOffsets(request);
+                case FETCH_COMMITTED_OFFSETS -> handleFetchCommittedOffsets(request);
                 case LIST_TOPICS -> handleListTopics(request);
                 case GET_METADATA -> handleGetMetadata(request);
                 case DELETE_TOPIC -> handleDeleteTopic(request);
@@ -175,5 +180,72 @@ public final class BrokerRequestDispatcher {
         }
         services.acknowledge(topic, ack.partition(), ack.offset());
         return Response.ok(request.correlationId(), new byte[0]);
+    }
+
+    private Response handleJoinGroup(Request request) {
+        RecordPayloadCodec.JoinGroupRequest join = RecordPayloadCodec.decodeJoinGroupRequest(request.payload());
+        var result =
+                services.consumerGroupManager()
+                        .joinGroup(join.groupId(), join.memberId(), join.topic());
+        List<RecordPayloadCodec.CommittedOffsetEntry> committed = new ArrayList<>();
+        for (var entry : result.committedOffsets().entrySet()) {
+            committed.add(new RecordPayloadCodec.CommittedOffsetEntry(entry.getKey(), entry.getValue()));
+        }
+        RecordPayloadCodec.JoinGroupResponse response =
+                new RecordPayloadCodec.JoinGroupResponse(
+                        result.generation(),
+                        result.assignedPartitions(),
+                        result.revokedPartitions(),
+                        committed);
+        return Response.ok(request.correlationId(), RecordPayloadCodec.encodeJoinGroupResponse(response));
+    }
+
+    private Response handleHeartbeat(Request request) {
+        RecordPayloadCodec.HeartbeatRequest heartbeat = RecordPayloadCodec.decodeHeartbeatRequest(request.payload());
+        services.consumerGroupManager().heartbeat(heartbeat.groupId(), heartbeat.memberId());
+        return Response.ok(request.correlationId(), new byte[0]);
+    }
+
+    private Response handleLeaveGroup(Request request) {
+        RecordPayloadCodec.LeaveGroupRequest leave = RecordPayloadCodec.decodeLeaveGroupRequest(request.payload());
+        services.consumerGroupManager().leaveGroup(leave.groupId(), leave.memberId());
+        return Response.ok(request.correlationId(), new byte[0]);
+    }
+
+    private Response handleCommitOffsets(Request request) {
+        RecordPayloadCodec.CommitOffsetsRequest commit =
+                RecordPayloadCodec.decodeCommitOffsetsRequest(request.payload());
+        TopicName topic = new TopicName(commit.topic());
+        if (services.partitionCount(topic).isEmpty()) {
+            return new Response(
+                    ProtocolConstants.VERSION_1, request.correlationId(), StatusCode.NOT_FOUND, new byte[0]);
+        }
+        java.util.Map<Integer, Long> offsets = new java.util.LinkedHashMap<>();
+        for (RecordPayloadCodec.CommittedOffsetEntry entry : commit.offsets()) {
+            offsets.put(entry.partition(), entry.offset());
+        }
+        services.consumerGroupManager().commitOffsets(commit.groupId(), commit.topic(), offsets);
+        return Response.ok(request.correlationId(), new byte[0]);
+    }
+
+    private Response handleFetchCommittedOffsets(Request request) {
+        RecordPayloadCodec.FetchCommittedOffsetsRequest fetch =
+                RecordPayloadCodec.decodeFetchCommittedOffsetsRequest(request.payload());
+        TopicName topic = new TopicName(fetch.topic());
+        if (services.partitionCount(topic).isEmpty()) {
+            return new Response(
+                    ProtocolConstants.VERSION_1, request.correlationId(), StatusCode.NOT_FOUND, new byte[0]);
+        }
+        var offsets =
+                services.consumerGroupManager()
+                        .fetchCommittedOffsets(fetch.groupId(), fetch.topic(), fetch.partitions());
+        List<RecordPayloadCodec.CommittedOffsetEntry> entries = new ArrayList<>();
+        for (var entry : offsets.entrySet()) {
+            entries.add(new RecordPayloadCodec.CommittedOffsetEntry(entry.getKey(), entry.getValue()));
+        }
+        return Response.ok(
+                request.correlationId(),
+                RecordPayloadCodec.encodeFetchCommittedOffsetsResponse(
+                        new RecordPayloadCodec.FetchCommittedOffsetsResponse(entries)));
     }
 }
