@@ -1,8 +1,6 @@
 package com.javastream.metrics;
 
-/**
- * Hook for counters, gauges, and histograms (Micrometer or JMX backends later).
- */
+/** Hook for counters, gauges, and histograms; implemented by {@link BrokerMetrics}. */
 public interface MetricsRegistry {
 
     void counter(String name, long delta);

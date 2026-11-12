@@ -119,7 +119,10 @@ class ClusterReplicationIntegrationTest {
                 0,
                 replicationFactor,
                 sessionTimeoutMs,
-                heartbeatMs);
+                heartbeatMs,
+                "127.0.0.1",
+                0,
+                "");
     }
 
     private static void createTopic(ClusterBrokerNode broker, String topic, int partitions) throws Exception {

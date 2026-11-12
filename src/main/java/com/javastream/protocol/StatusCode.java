@@ -11,7 +11,8 @@ public enum StatusCode {
   PAYLOAD_TOO_LARGE(4),
   INTERNAL_ERROR(5),
   UNKNOWN_OPERATION(6),
-  MALFORMED(7);
+  MALFORMED(7),
+  FORBIDDEN(8);
 
   private final short wireValue;
 

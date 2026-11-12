@@ -110,7 +110,10 @@ class FaultToleranceIntegrationTest {
                 0,
                 rf,
                 sessionMs,
-                heartbeatMs);
+                heartbeatMs,
+                "127.0.0.1",
+                0,
+                "");
     }
 
     private static JavaStreamConfig singleBrokerConfig() {

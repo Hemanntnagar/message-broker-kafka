@@ -6,6 +6,7 @@ import com.javastream.protocol.ProtocolDecoder;
 import com.javastream.protocol.ProtocolEncoder;
 import com.javastream.protocol.Request;
 import com.javastream.protocol.Response;
+import com.javastream.security.ConnectionSecurityContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -33,6 +34,7 @@ public final class ClientHandler implements Runnable {
   private final int maxRequestBytes;
   private final Consumer<ClientHandler> onClose;
   private final com.javastream.broker.BrokerRequestDispatcher dispatcher;
+  private final ConnectionSecurityContext securityContext = new ConnectionSecurityContext();
 
   ClientHandler(
       Socket socket,
@@ -108,15 +110,11 @@ public final class ClientHandler implements Runnable {
       }
 
       for (Request request : requests) {
-        Response response = dispatch(request);
+        Response response = dispatcher.dispatch(request, remoteAddress(), securityContext);
         out.write(encoder.encodeResponse(response));
         out.flush();
       }
     }
-  }
-
-  private Response dispatch(Request request) {
-    return dispatcher.dispatch(request);
   }
 
   void closeQuietly() {

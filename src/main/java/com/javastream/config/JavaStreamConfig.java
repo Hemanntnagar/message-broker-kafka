@@ -1,6 +1,7 @@
 package com.javastream.config;
 
 import com.javastream.common.Preconditions;
+import com.javastream.security.SecuritySettings;
 
 /**
  * Immutable runtime configuration for a single broker instance.
@@ -21,6 +22,10 @@ public final class JavaStreamConfig {
     private final int replicationFactor;
     private final long clusterSessionTimeoutMs;
     private final long clusterHeartbeatIntervalMs;
+    private final String monitoringHttpHost;
+    private final int monitoringHttpPort;
+    private final String adminApiToken;
+    private final SecuritySettings securitySettings;
 
     public JavaStreamConfig(
             String environment,
@@ -44,7 +49,11 @@ public final class JavaStreamConfig {
                 0,
                 1,
                 15_000,
-                2_000);
+                2_000,
+                "127.0.0.1",
+                8080,
+                "",
+                SecuritySettings.disabled());
     }
 
     public JavaStreamConfig(
@@ -61,7 +70,50 @@ public final class JavaStreamConfig {
             int replicationListenPort,
             int replicationFactor,
             long clusterSessionTimeoutMs,
-            long clusterHeartbeatIntervalMs) {
+            long clusterHeartbeatIntervalMs,
+            String monitoringHttpHost,
+            int monitoringHttpPort,
+            String adminApiToken) {
+        this(
+                environment,
+                brokerId,
+                listenHost,
+                listenPort,
+                dataDirectory,
+                clusterEnabled,
+                defaultTopicPartitionCount,
+                coordinatorBrokerId,
+                coordinatorHost,
+                coordinatorReplicationPort,
+                replicationListenPort,
+                replicationFactor,
+                clusterSessionTimeoutMs,
+                clusterHeartbeatIntervalMs,
+                monitoringHttpHost,
+                monitoringHttpPort,
+                adminApiToken,
+                SecuritySettings.disabled());
+    }
+
+    public JavaStreamConfig(
+            String environment,
+            int brokerId,
+            String listenHost,
+            int listenPort,
+            String dataDirectory,
+            boolean clusterEnabled,
+            int defaultTopicPartitionCount,
+            int coordinatorBrokerId,
+            String coordinatorHost,
+            int coordinatorReplicationPort,
+            int replicationListenPort,
+            int replicationFactor,
+            long clusterSessionTimeoutMs,
+            long clusterHeartbeatIntervalMs,
+            String monitoringHttpHost,
+            int monitoringHttpPort,
+            String adminApiToken,
+            SecuritySettings securitySettings) {
         this.environment = Preconditions.requireNonBlank(environment, "environment");
         this.brokerId = brokerId;
         this.listenHost = Preconditions.requireNonBlank(listenHost, "listenHost");
@@ -79,6 +131,10 @@ public final class JavaStreamConfig {
         this.replicationFactor = Preconditions.requirePositive(replicationFactor, "replicationFactor");
         this.clusterSessionTimeoutMs = Preconditions.requirePositive((int) clusterSessionTimeoutMs, "clusterSessionTimeoutMs");
         this.clusterHeartbeatIntervalMs = Preconditions.requirePositive((int) clusterHeartbeatIntervalMs, "clusterHeartbeatIntervalMs");
+        this.monitoringHttpHost = Preconditions.requireNonBlank(monitoringHttpHost, "monitoringHttpHost");
+        this.monitoringHttpPort = monitoringHttpPort;
+        this.adminApiToken = adminApiToken == null ? "" : adminApiToken;
+        this.securitySettings = securitySettings == null ? SecuritySettings.disabled() : securitySettings;
     }
 
     public int defaultTopicPartitionCount() {
@@ -135,6 +191,22 @@ public final class JavaStreamConfig {
 
     public long clusterHeartbeatIntervalMs() {
         return clusterHeartbeatIntervalMs;
+    }
+
+    public String monitoringHttpHost() {
+        return monitoringHttpHost;
+    }
+
+    public int monitoringHttpPort() {
+        return monitoringHttpPort;
+    }
+
+    public String adminApiToken() {
+        return adminApiToken;
+    }
+
+    public SecuritySettings securitySettings() {
+        return securitySettings;
     }
 
     @Override

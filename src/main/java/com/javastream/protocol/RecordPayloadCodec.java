@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /** Encode/decode produce, fetch, and ack operation payloads (v1). */
 public final class RecordPayloadCodec {
@@ -78,7 +79,12 @@ public final class RecordPayloadCodec {
 
     public record AckRequest(String topic, int partition, long offset) {}
 
-    public record CreateTopicRequest(String topic, int partitionCount) {}
+    public record CreateTopicRequest(String topic, int partitionCount, Optional<String> adminToken) {
+
+        public CreateTopicRequest(String topic, int partitionCount) {
+            this(topic, partitionCount, Optional.empty());
+        }
+    }
 
     public record ListTopicsResponse(List<TopicEntry> topics) {}
 
@@ -86,7 +92,39 @@ public final class RecordPayloadCodec {
 
     public record GetMetadataRequest(String topic) {}
 
-    public record DeleteTopicRequest(String topic) {}
+    public record DeleteTopicRequest(String topic, Optional<String> adminToken) {
+
+        public DeleteTopicRequest(String topic) {
+            this(topic, Optional.empty());
+        }
+    }
+
+    public record DescribeGroupRequest(String groupId) {}
+
+    public record DescribeGroupResponse(
+            String groupId, String topic, int generation, List<GroupMemberAssignment> members) {}
+
+    public record GroupMemberAssignment(String memberId, List<Integer> partitions) {}
+
+    public record GetConsumerLagRequest(String groupId, String topic) {}
+
+    public record ConsumerLagEntry(int partition, long committedOffset, long logEndOffset, long lag) {}
+
+    public record GetConsumerLagResponse(List<ConsumerLagEntry> entries) {}
+
+    public record BrokerDirectoryEntry(
+            int brokerId, String host, int clientPort, int replicationPort, String state, long uptimeSeconds) {}
+
+    public record ListBrokersResponse(List<BrokerDirectoryEntry> brokers) {}
+
+    public record GetBrokerInfoRequest(int brokerId) {}
+
+    public record ClientAuthRequest(String username, String password) {}
+
+    /** Empty payload on success; error text is advisory when authentication fails. */
+    public record ClientAuthResponse(boolean authenticated, String message) {}
+
+    public record GetBrokerInfoResponse(BrokerDirectoryEntry broker) {}
 
     public record JoinGroupRequest(String groupId, String memberId, String topic) {}
 
@@ -331,10 +369,20 @@ public final class RecordPayloadCodec {
 
     public static byte[] encodeCreateTopicRequest(CreateTopicRequest request) {
         byte[] topicBytes = utf8(request.topic());
-        ByteBuffer buffer = ByteBuffer.allocate(2 + topicBytes.length + 4).order(ByteOrder.BIG_ENDIAN);
+        byte[] tokenBytes =
+                request.adminToken().filter(token -> !token.isBlank()).map(RecordPayloadCodec::utf8).orElse(null);
+        int size = 2 + topicBytes.length + 4;
+        if (tokenBytes != null) {
+            size += 2 + tokenBytes.length;
+        }
+        ByteBuffer buffer = ByteBuffer.allocate(size).order(ByteOrder.BIG_ENDIAN);
         buffer.putShort((short) topicBytes.length);
         buffer.put(topicBytes);
         buffer.putInt(request.partitionCount());
+        if (tokenBytes != null) {
+            buffer.putShort((short) tokenBytes.length);
+            buffer.put(tokenBytes);
+        }
         return toByteArray(buffer);
     }
 
@@ -342,8 +390,10 @@ public final class RecordPayloadCodec {
         ByteBuffer buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN);
         String topic = readUtf8Topic(buffer);
         int partitionCount = buffer.getInt();
+        Optional<String> adminToken =
+                buffer.hasRemaining() ? Optional.of(readShortUtf8(buffer, "admin token")) : Optional.empty();
         ensureConsumed(buffer);
-        return new CreateTopicRequest(topic, partitionCount);
+        return new CreateTopicRequest(topic, partitionCount, adminToken);
     }
 
     public static byte[] encodeListTopicsResponse(ListTopicsResponse response) {
@@ -431,17 +481,29 @@ public final class RecordPayloadCodec {
 
     public static byte[] encodeDeleteTopicRequest(DeleteTopicRequest request) {
         byte[] topicBytes = utf8(request.topic());
-        ByteBuffer buffer = ByteBuffer.allocate(2 + topicBytes.length).order(ByteOrder.BIG_ENDIAN);
+        byte[] tokenBytes =
+                request.adminToken().filter(token -> !token.isBlank()).map(RecordPayloadCodec::utf8).orElse(null);
+        int size = 2 + topicBytes.length;
+        if (tokenBytes != null) {
+            size += 2 + tokenBytes.length;
+        }
+        ByteBuffer buffer = ByteBuffer.allocate(size).order(ByteOrder.BIG_ENDIAN);
         buffer.putShort((short) topicBytes.length);
         buffer.put(topicBytes);
+        if (tokenBytes != null) {
+            buffer.putShort((short) tokenBytes.length);
+            buffer.put(tokenBytes);
+        }
         return toByteArray(buffer);
     }
 
     public static DeleteTopicRequest decodeDeleteTopicRequest(byte[] payload) {
         ByteBuffer buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN);
         String topic = readUtf8Topic(buffer);
+        Optional<String> adminToken =
+                buffer.hasRemaining() ? Optional.of(readShortUtf8(buffer, "admin token")) : Optional.empty();
         ensureConsumed(buffer);
-        return new DeleteTopicRequest(topic);
+        return new DeleteTopicRequest(topic, adminToken);
     }
 
     public static byte[] encodeJoinGroupRequest(JoinGroupRequest request) {
@@ -783,5 +845,160 @@ public final class RecordPayloadCodec {
         buffer.flip();
         buffer.get(out);
         return out;
+    }
+
+    public static byte[] encodeDescribeGroupRequest(DescribeGroupRequest request) {
+        byte[] idBytes = utf8(request.groupId());
+        ByteBuffer buffer = ByteBuffer.allocate(2 + idBytes.length).order(ByteOrder.BIG_ENDIAN);
+        buffer.putShort((short) idBytes.length);
+        buffer.put(idBytes);
+        return toByteArray(buffer);
+    }
+
+    public static DescribeGroupRequest decodeDescribeGroupRequest(byte[] payload) {
+        ByteBuffer buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN);
+        String groupId = readShortUtf8(buffer, "group id");
+        ensureConsumed(buffer);
+        return new DescribeGroupRequest(groupId);
+    }
+
+    public static byte[] encodeDescribeGroupResponse(DescribeGroupResponse response) {
+        byte[] groupBytes = utf8(response.groupId());
+        byte[] topicBytes = utf8(response.topic());
+        int size = 2 + groupBytes.length + 2 + topicBytes.length + 4 + 4;
+        for (GroupMemberAssignment member : response.members()) {
+            byte[] memberBytes = utf8(member.memberId());
+            size += 2 + memberBytes.length + 4 + 4 * member.partitions().size();
+        }
+        ByteBuffer buffer = ByteBuffer.allocate(size).order(ByteOrder.BIG_ENDIAN);
+        buffer.putShort((short) groupBytes.length);
+        buffer.put(groupBytes);
+        buffer.putShort((short) topicBytes.length);
+        buffer.put(topicBytes);
+        buffer.putInt(response.generation());
+        buffer.putInt(response.members().size());
+        for (GroupMemberAssignment member : response.members()) {
+            byte[] memberBytes = utf8(member.memberId());
+            buffer.putShort((short) memberBytes.length);
+            buffer.put(memberBytes);
+            buffer.putInt(member.partitions().size());
+            for (int partition : member.partitions()) {
+                buffer.putInt(partition);
+            }
+        }
+        return toByteArray(buffer);
+    }
+
+    public static byte[] encodeGetConsumerLagRequest(GetConsumerLagRequest request) {
+        byte[] groupBytes = utf8(request.groupId());
+        byte[] topicBytes = utf8(request.topic());
+        ByteBuffer buffer =
+                ByteBuffer.allocate(2 + groupBytes.length + 2 + topicBytes.length).order(ByteOrder.BIG_ENDIAN);
+        buffer.putShort((short) groupBytes.length);
+        buffer.put(groupBytes);
+        buffer.putShort((short) topicBytes.length);
+        buffer.put(topicBytes);
+        return toByteArray(buffer);
+    }
+
+    public static GetConsumerLagRequest decodeGetConsumerLagRequest(byte[] payload) {
+        ByteBuffer buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN);
+        String groupId = readShortUtf8(buffer, "group id");
+        String topic = readShortUtf8(buffer, "topic");
+        ensureConsumed(buffer);
+        return new GetConsumerLagRequest(groupId, topic);
+    }
+
+    public static byte[] encodeGetConsumerLagResponse(GetConsumerLagResponse response) {
+        int size = 4;
+        for (ConsumerLagEntry entry : response.entries()) {
+            size += 4 + 8 + 8 + 8;
+        }
+        ByteBuffer buffer = ByteBuffer.allocate(size).order(ByteOrder.BIG_ENDIAN);
+        buffer.putInt(response.entries().size());
+        for (ConsumerLagEntry entry : response.entries()) {
+            buffer.putInt(entry.partition());
+            buffer.putLong(entry.committedOffset());
+            buffer.putLong(entry.logEndOffset());
+            buffer.putLong(entry.lag());
+        }
+        return toByteArray(buffer);
+    }
+
+    public static byte[] encodeListBrokersResponse(ListBrokersResponse response) {
+        int size = 4;
+        for (BrokerDirectoryEntry broker : response.brokers()) {
+            byte[] hostBytes = utf8(broker.host());
+            byte[] stateBytes = utf8(broker.state());
+            size += 4 + 2 + hostBytes.length + 4 + 4 + 2 + stateBytes.length + 8;
+        }
+        ByteBuffer buffer = ByteBuffer.allocate(size).order(ByteOrder.BIG_ENDIAN);
+        buffer.putInt(response.brokers().size());
+        for (BrokerDirectoryEntry broker : response.brokers()) {
+            byte[] hostBytes = utf8(broker.host());
+            byte[] stateBytes = utf8(broker.state());
+            buffer.putInt(broker.brokerId());
+            buffer.putShort((short) hostBytes.length);
+            buffer.put(hostBytes);
+            buffer.putInt(broker.clientPort());
+            buffer.putInt(broker.replicationPort());
+            buffer.putShort((short) stateBytes.length);
+            buffer.put(stateBytes);
+            buffer.putLong(broker.uptimeSeconds());
+        }
+        return toByteArray(buffer);
+    }
+
+    public static byte[] encodeGetBrokerInfoRequest(GetBrokerInfoRequest request) {
+        ByteBuffer buffer = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN);
+        buffer.putInt(request.brokerId());
+        return toByteArray(buffer);
+    }
+
+    public static GetBrokerInfoRequest decodeGetBrokerInfoRequest(byte[] payload) {
+        ByteBuffer buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN);
+        int brokerId = buffer.getInt();
+        ensureConsumed(buffer);
+        return new GetBrokerInfoRequest(brokerId);
+    }
+
+    public static byte[] encodeGetBrokerInfoResponse(GetBrokerInfoResponse response) {
+        return encodeListBrokersResponse(new ListBrokersResponse(List.of(response.broker())));
+    }
+
+    public static byte[] encodeClientAuthRequest(ClientAuthRequest request) {
+        byte[] user = utf8(request.username());
+        byte[] pass = utf8(request.password());
+        ByteBuffer buffer = ByteBuffer.allocate(2 + user.length + 2 + pass.length).order(ByteOrder.BIG_ENDIAN);
+        buffer.putShort((short) user.length);
+        buffer.put(user);
+        buffer.putShort((short) pass.length);
+        buffer.put(pass);
+        return toByteArray(buffer);
+    }
+
+    public static ClientAuthRequest decodeClientAuthRequest(byte[] payload) {
+        ByteBuffer buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN);
+        String username = readShortUtf8(buffer, "username");
+        String password = readShortUtf8(buffer, "password");
+        ensureConsumed(buffer);
+        return new ClientAuthRequest(username, password);
+    }
+
+    public static byte[] encodeClientAuthResponse(ClientAuthResponse response) {
+        byte[] messageBytes = utf8(response.message() == null ? "" : response.message());
+        ByteBuffer buffer = ByteBuffer.allocate(1 + 2 + messageBytes.length).order(ByteOrder.BIG_ENDIAN);
+        buffer.put((byte) (response.authenticated() ? 1 : 0));
+        buffer.putShort((short) messageBytes.length);
+        buffer.put(messageBytes);
+        return toByteArray(buffer);
+    }
+
+    public static ClientAuthResponse decodeClientAuthResponse(byte[] payload) {
+        ByteBuffer buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN);
+        boolean ok = buffer.get() == 1;
+        String message = readShortUtf8(buffer, "auth message");
+        ensureConsumed(buffer);
+        return new ClientAuthResponse(ok, message);
     }
 }

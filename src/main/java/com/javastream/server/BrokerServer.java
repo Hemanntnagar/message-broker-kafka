@@ -2,7 +2,11 @@ package com.javastream.server;
 
 import com.javastream.broker.BrokerRequestDispatcher;
 import com.javastream.broker.BrokerServices;
+import com.javastream.cluster.ClusterManager;
 import com.javastream.config.JavaStreamConfig;
+import com.javastream.monitoring.MonitoringBundle;
+import com.javastream.security.TlsServerSockets;
+import com.javastream.security.TlsSettings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -32,7 +36,10 @@ public final class BrokerServer {
     private final int socketTimeoutMs;
     private final int maxRequestBytes;
     private final int backlog;
+    private final int maxConcurrentConnections;
     private final BrokerRequestDispatcher dispatcher;
+    private final MonitoringBundle monitoring;
+    private final TlsSettings tlsSettings;
 
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final Set<ClientHandler> activeHandlers = ConcurrentHashMap.newKeySet();
@@ -41,17 +48,31 @@ public final class BrokerServer {
     private Thread acceptorThread;
 
     public BrokerServer(JavaStreamConfig config) {
-        this(config, new BrokerServices(config.defaultTopicPartitionCount()));
+        this(config, new BrokerServices(config));
     }
 
     public BrokerServer(JavaStreamConfig config, BrokerServices brokerServices) {
-        this(
-                config.listenHost(),
-                config.listenPort(),
-                DEFAULT_SOCKET_TIMEOUT_MS,
-                DEFAULT_MAX_REQUEST_BYTES,
-                DEFAULT_BACKLOG,
-                new BrokerRequestDispatcher(brokerServices));
+        this(config, brokerServices, java.util.Optional.empty());
+    }
+
+    public BrokerServer(JavaStreamConfig config, BrokerServices brokerServices, java.util.Optional<ClusterManager> cluster) {
+        MonitoringBundle monitoring =
+                MonitoringBundle.create(config, brokerServices, cluster, config.listenPort());
+        this.monitoring = monitoring;
+        this.listenHost = config.listenHost();
+        this.listenPort = config.listenPort();
+        this.socketTimeoutMs = DEFAULT_SOCKET_TIMEOUT_MS;
+        this.maxRequestBytes = config.securitySettings().maxRequestBytes();
+        this.maxConcurrentConnections = config.securitySettings().maxConcurrentConnections();
+        this.backlog = DEFAULT_BACKLOG;
+        this.tlsSettings = config.securitySettings().tls();
+        this.dispatcher =
+                new BrokerRequestDispatcher(
+                        brokerServices,
+                        monitoring.metrics(),
+                        monitoring.adminAuthority(),
+                        monitoring.adminService(),
+                        config.securitySettings());
     }
 
     BrokerServer(
@@ -60,7 +81,13 @@ public final class BrokerServer {
             int socketTimeoutMs,
             int maxRequestBytes,
             int backlog) {
-        this(listenHost, listenPort, socketTimeoutMs, maxRequestBytes, backlog, new BrokerRequestDispatcher(new BrokerServices()));
+        this(
+                listenHost,
+                listenPort,
+                socketTimeoutMs,
+                maxRequestBytes,
+                backlog,
+                new BrokerRequestDispatcher(new BrokerServices()));
     }
 
     BrokerServer(
@@ -75,7 +102,10 @@ public final class BrokerServer {
         this.socketTimeoutMs = socketTimeoutMs;
         this.maxRequestBytes = maxRequestBytes;
         this.backlog = backlog;
+        this.maxConcurrentConnections = Integer.MAX_VALUE;
         this.dispatcher = dispatcher;
+        this.monitoring = null;
+        this.tlsSettings = TlsSettings.disabled();
     }
 
     public BrokerRequestDispatcher dispatcher() {
@@ -120,17 +150,33 @@ public final class BrokerServer {
         }
 
         try {
-            serverSocket = new ServerSocket();
-            serverSocket.setReuseAddress(true);
-            serverSocket.bind(new InetSocketAddress(listenHost, listenPort), backlog);
+            if (tlsSettings.enabled()) {
+                serverSocket = TlsServerSockets.openBound(tlsSettings, listenHost, listenPort, backlog);
+            } else {
+                serverSocket = new ServerSocket();
+                serverSocket.setReuseAddress(true);
+                serverSocket.bind(new InetSocketAddress(listenHost, listenPort), backlog);
+            }
         } catch (IOException e) {
             running.set(false);
             throw new UncheckedIOException(
                     "Failed to bind TCP listener on %s:%d".formatted(listenHost, listenPort), e);
         }
 
-        log.info("BrokerServer listening on {}:{} (socketTimeoutMs={}, maxRequestBytes={})",
-                listenHost, boundPort(), socketTimeoutMs, maxRequestBytes);
+        log.info(
+                "BrokerServer listening on {}:{} (tls={}, socketTimeoutMs={}, maxRequestBytes={}, maxConnections={})",
+                listenHost,
+                boundPort(),
+                tlsSettings.enabled(),
+                socketTimeoutMs,
+                maxRequestBytes,
+                maxConcurrentConnections);
+
+        if (monitoring != null) {
+            monitoring.attach(this);
+            monitoring.setReady(true);
+            monitoring.startHttp();
+        }
 
         acceptorThread = Thread.ofVirtual().name("broker-acceptor").start(this::acceptLoop);
     }
@@ -139,6 +185,11 @@ public final class BrokerServer {
         while (running.get()) {
             try {
                 Socket clientSocket = serverSocket.accept();
+                if (activeHandlers.size() >= maxConcurrentConnections) {
+                    log.warn("Rejecting connection: maxConcurrentConnections={}", maxConcurrentConnections);
+                    clientSocket.close();
+                    continue;
+                }
                 configureClientSocket(clientSocket);
                 ClientHandler handler = new ClientHandler(
                         clientSocket, socketTimeoutMs, maxRequestBytes, activeHandlers::remove, dispatcher);
@@ -165,6 +216,11 @@ public final class BrokerServer {
         }
 
         log.info("Stopping BrokerServer on {}:{}", listenHost, listenPort);
+
+        if (monitoring != null) {
+            monitoring.setReady(false);
+            monitoring.close();
+        }
 
         IOException closeError = null;
         if (serverSocket != null && !serverSocket.isClosed()) {
@@ -195,7 +251,11 @@ public final class BrokerServer {
         log.info("BrokerServer stopped");
     }
 
-    int activeConnectionCount() {
+    public int activeConnectionCount() {
         return activeHandlers.size();
+    }
+
+    public MonitoringBundle monitoring() {
+        return monitoring;
     }
 }

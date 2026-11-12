@@ -1,6 +1,8 @@
 package com.javastream.config;
 
 import com.javastream.exception.ConfigurationException;
+import com.javastream.security.SecurityConfigLoader;
+import com.javastream.security.SecuritySettings;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -86,6 +88,7 @@ public final class ConfigLoader {
 
     private static JavaStreamConfig buildConfig(Properties props) {
         try {
+            SecuritySettings security = SecurityConfigLoader.fromProperties(props);
             return new JavaStreamConfig(
                     props.getProperty("environment", "development"),
                     parseInt(props.getProperty("broker.id", "0"), "broker.id"),
@@ -100,7 +103,11 @@ public final class ConfigLoader {
                     parseInt(props.getProperty("network.replication.port", "0"), "network.replication.port"),
                     parseInt(props.getProperty("cluster.replication.factor", "1"), "cluster.replication.factor"),
                     parseLong(props.getProperty("cluster.session.timeout.ms", "15000"), "cluster.session.timeout.ms"),
-                    parseLong(props.getProperty("cluster.heartbeat.interval.ms", "2000"), "cluster.heartbeat.interval.ms"));
+                    parseLong(props.getProperty("cluster.heartbeat.interval.ms", "2000"), "cluster.heartbeat.interval.ms"),
+                    props.getProperty("monitoring.http.host", "127.0.0.1"),
+                    parseInt(props.getProperty("monitoring.http.port", "8080"), "monitoring.http.port"),
+                    props.getProperty("admin.api.token", ""),
+                    security);
         } catch (NumberFormatException e) {
             throw new ConfigurationException("Invalid numeric configuration value", e);
         }

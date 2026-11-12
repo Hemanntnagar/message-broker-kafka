@@ -47,6 +47,7 @@ Header size for both directions: **16 bytes**.
 | 11 | `LEAVE_GROUP` |
 | 12 | `COMMIT_OFFSETS` |
 | 13 | `FETCH_COMMITTED_OFFSETS` |
+| 18 | `CLIENT_AUTH` |
 
 ## Operation payloads (v1)
 
@@ -114,6 +115,15 @@ Header size for both directions: **16 bytes**.
 | Topic name | `uint16` length + UTF-8 |
 
 **OK response:** `int32` generation, `int32` assigned count + assigned partitions, `int32` revoked count + revoked partitions, `int32` committed count + repeated (`int32` partition, `int64` offset).
+
+### `CLIENT_AUTH` (18)
+
+| Field | Type |
+|-------|------|
+| Username | `uint16` length + UTF-8 |
+| Password | `uint16` length + UTF-8 (never logged server-side) |
+
+**OK response payload:** `uint8` authenticated (`1` = success), `uint16` message length + UTF-8 advisory text (empty on success). Failed authentication returns status `FORBIDDEN` with the same payload shape (`authenticated = 0`).
 
 ### `HEARTBEAT` (10) / `LEAVE_GROUP` (11)
 

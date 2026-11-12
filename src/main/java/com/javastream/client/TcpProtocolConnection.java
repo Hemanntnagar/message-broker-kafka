@@ -75,7 +75,23 @@ public class TcpProtocolConnection implements AutoCloseable {
         return send(operation, payload, null);
     }
 
+    /** Sends a request and returns the broker response without treating non-OK status as fatal. */
+    public synchronized Response sendUnchecked(OperationCode operation, byte[] payload) throws IOException {
+        return exchange(operation, payload, null);
+    }
+
     public synchronized Response send(OperationCode operation, byte[] payload, Duration requestTimeout)
+            throws IOException {
+        Response response = exchange(operation, payload, requestTimeout);
+        if (response.status() != StatusCode.OK) {
+            throw new BrokerResponseException(
+                    response.status(),
+                    "Broker returned %s for operation %s".formatted(response.status(), operation));
+        }
+        return response;
+    }
+
+    private synchronized Response exchange(OperationCode operation, byte[] payload, Duration requestTimeout)
             throws IOException {
         if (!isConnected()) {
             throw new ClientNotConnectedException("Client is not connected to %s:%d".formatted(host, port));
@@ -96,11 +112,6 @@ public class TcpProtocolConnection implements AutoCloseable {
                 throw new JavaStreamException(
                         "Correlation mismatch: expected %d got %d".formatted(id, response.correlationId()));
             }
-            if (response.status() != StatusCode.OK) {
-                throw new BrokerResponseException(
-                        response.status(),
-                        "Broker returned %s for operation %s".formatted(response.status(), operation));
-            }
             return response;
         } catch (IOException e) {
             closeQuietly();
@@ -110,6 +121,18 @@ public class TcpProtocolConnection implements AutoCloseable {
                 current.setSoTimeout(previousTimeout);
             }
         }
+    }
+
+    public synchronized boolean authenticate(String username, String password) throws IOException {
+        byte[] payload =
+                com.javastream.protocol.RecordPayloadCodec.encodeClientAuthRequest(
+                        new com.javastream.protocol.RecordPayloadCodec.ClientAuthRequest(username, password));
+        Response response = sendUnchecked(OperationCode.CLIENT_AUTH, payload);
+        if (response.status() == StatusCode.OK) {
+            var decoded = com.javastream.protocol.RecordPayloadCodec.decodeClientAuthResponse(response.payload());
+            return decoded.authenticated();
+        }
+        return false;
     }
 
     @Override

@@ -227,6 +227,21 @@ public final class ConsumerGroupManager implements ConsumerGroupCoordinator, Aut
         }
     }
 
+    public com.javastream.admin.BrokerAdminService.GroupDescription describeGroup(String groupId) {
+        Objects.requireNonNull(groupId, "groupId");
+        groupLock.lock();
+        try {
+            GroupState group = groups.get(groupId);
+            if (group == null) {
+                throw new JavaStreamException("Unknown consumer group: " + groupId);
+            }
+            return new com.javastream.admin.BrokerAdminService.GroupDescription(
+                    group.groupId, group.topic, group.generation, currentAssignment(groupId));
+        } finally {
+            groupLock.unlock();
+        }
+    }
+
   public Map<GroupPartitionOffsetKey, Long> committedOffsetsSnapshot() {
         return Map.copyOf(committedOffsets);
     }

@@ -17,7 +17,9 @@ public final class ClusterBrokerNode implements BrokerNode {
 
     public ClusterBrokerNode(JavaStreamConfig config) {
         this.runtime = ClusterRuntime.create(config);
-        this.brokerServer = new BrokerServer(config, runtime.brokerServices());
+        this.brokerServer =
+                new BrokerServer(
+                        config, runtime.brokerServices(), java.util.Optional.of(runtime.clusterManager()));
     }
 
     ClusterBrokerNode(ClusterRuntime runtime, BrokerServer brokerServer) {

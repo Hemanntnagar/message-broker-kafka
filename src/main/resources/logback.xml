@@ -3,8 +3,20 @@
     <property name="LOG_PATTERN" value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"/>
 
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder>
-            <pattern>${LOG_PATTERN}</pattern>
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <includeMdcKeyName>brokerId</includeMdcKeyName>
+            <includeMdcKeyName>clientId</includeMdcKeyName>
+            <includeMdcKeyName>correlationId</includeMdcKeyName>
+            <includeMdcKeyName>operation</includeMdcKeyName>
+            <includeMdcKeyName>status</includeMdcKeyName>
+            <includeMdcKeyName>error</includeMdcKeyName>
+            <fieldNames>
+                <timestamp>timestamp</timestamp>
+                <message>message</message>
+                <logger>logger</logger>
+                <thread>thread</thread>
+                <level>level</level>
+            </fieldNames>
         </encoder>
     </appender>
 
@@ -14,8 +26,13 @@
             <fileNamePattern>logs/javastream.%d{yyyy-MM-dd}.log</fileNamePattern>
             <maxHistory>14</maxHistory>
         </rollingPolicy>
-        <encoder>
-            <pattern>${LOG_PATTERN}</pattern>
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <includeMdcKeyName>brokerId</includeMdcKeyName>
+            <includeMdcKeyName>clientId</includeMdcKeyName>
+            <includeMdcKeyName>correlationId</includeMdcKeyName>
+            <includeMdcKeyName>operation</includeMdcKeyName>
+            <includeMdcKeyName>status</includeMdcKeyName>
+            <includeMdcKeyName>error</includeMdcKeyName>
         </encoder>
     </appender>
 

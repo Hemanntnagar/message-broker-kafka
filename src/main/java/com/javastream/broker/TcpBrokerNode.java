@@ -17,7 +17,7 @@ public final class TcpBrokerNode implements BrokerNode {
     public TcpBrokerNode(JavaStreamConfig config) {
         BrokerServices services = new BrokerServices(config);
         this.brokerServices = services;
-        this.brokerServer = new BrokerServer(config, services);
+        this.brokerServer = new BrokerServer(config, services, java.util.Optional.empty());
     }
 
     TcpBrokerNode(BrokerServices brokerServices, BrokerServer brokerServer) {
