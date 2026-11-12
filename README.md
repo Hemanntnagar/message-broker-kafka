@@ -2,7 +2,7 @@
 
 JavaStream is a **Kafka-inspired** distributed message broker built in Java.
 
-**Phase 1** adds a TCP listener with virtual-threaded client handlers (default port **9092**). Message storage and produce/consume semantics are not implemented yet.
+**Phase 2** adds the versioned JavaStream binary wire protocol on top of the Phase 1 TCP listener (default port **9092**). Message storage and full broker operations are not implemented yet.
 
 ## Requirements
 
@@ -34,13 +34,9 @@ Stop gracefully with **Ctrl+C** (SIGINT). The JVM shutdown hook calls `JavaStrea
 
 ### Manual TCP smoke test
 
-Wire format (Phase 1): **4-byte big-endian length** + payload. The server replies with `0` (4-byte length of an empty body).
+Wire format is documented in [PROTOCOL.md](PROTOCOL.md) (magic `JSTR`, version **1**, 16-byte header, payload). A minimal `PING` uses operation code **1** and an empty payload; the server responds with status **OK** and the same correlation ID.
 
-```bash
-# Example with netcat (send length 5 + "hello")
-printf '\x00\x00\x00\x05hello' | nc 127.0.0.1 9092 | xxd
-# Expect four zero bytes (empty response payload length)
-```
+For scripted clients, use `ProtocolEncoder` / `ProtocolDecoder` in `com.javastream.protocol` (see protocol tests).
 
 Override bind address/port:
 

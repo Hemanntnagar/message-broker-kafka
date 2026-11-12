@@ -15,7 +15,7 @@ public final class JavaStreamApplication {
     }
 
     public static void main(String[] args) {
-        log.info("JavaStream Phase 1 — broker bootstrap (TCP)");
+        log.info("JavaStream Phase 2 — broker bootstrap (TCP + protocol v1)");
         JavaStreamServer server = new JavaStreamServer(ConfigLoader.load());
         Runtime.getRuntime().addShutdownHook(new Thread(server::stop, "javastream-shutdown"));
         server.start();

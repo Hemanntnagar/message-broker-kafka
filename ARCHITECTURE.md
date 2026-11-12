@@ -44,7 +44,7 @@ partition   leadership     coordinator   ReplicaManager
 | `server` | JVM entry, TCP acceptor | `JavaStreamServer`, `BrokerServer`, `ClientHandler` |
 | `config` | Layered config, env overrides | `ConfigLoader`, `JavaStreamConfig` |
 | `broker` | Node coordinator | `TcpBrokerNode` (default), `NoOpBrokerNode` (tests) |
-| `protocol` | Encode/decode, dispatch | Interfaces only |
+| `protocol` | Encode/decode, dispatch | `ProtocolEncoder`, `ProtocolDecoder`, v1 frames — see `PROTOCOL.md` |
 | `topic` / `partition` | Naming & shard identity | Value types + registry interface |
 | `storage` | Append/read log | Interface only |
 | `producer` / `consumer` | Client APIs | Interfaces only |
@@ -85,7 +85,13 @@ JUnit 5 unit tests for configuration loading, environment key mapping, server li
 ## Phase 1 networking
 
 - **`BrokerServer`**: `ServerSocket` accept loop on a virtual thread; binds `JavaStreamConfig.listenHost()` / `listenPort()` (default **9092**).
-- **`ClientHandler`**: one virtual thread per connection; length-prefixed frames; socket read timeout **30s**; max request **1 MiB**; empty ACK response until protocol/storage land.
+- **`ClientHandler`**: one virtual thread per connection; JavaStream v1 binary frames via `ProtocolDecoder` / `ProtocolEncoder`; socket read timeout **30s**; max payload **1 MiB**; `PING` and stub `OK` responses until broker services land.
+
+## Phase 2 protocol
+
+- **`PROTOCOL.md`**: magic, version, correlation ID, operation/status, length-prefixed payload.
+- **`ProtocolDecoder`**: streaming reassembly (partial reads, multiple frames per read); rejects bad magic, version, and oversize lengths.
+- **`ProtocolEncoder`**: symmetric request/response framing.
 - Graceful shutdown closes the listening socket and all tracked client sockets.
 
 ## Next phases (not in scope here)
