@@ -11,7 +11,7 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * Thread-safe in-memory append log per partition (Phase 3 broker backing store).
  */
-public final class InMemoryMessageStore implements MessageStore {
+public final class InMemoryMessageStore implements BrokerMessageStore {
 
     private final AtomicLong nextMessageId = new AtomicLong(1);
     private final ConcurrentHashMap<PartitionId, PartitionLog> logs = new ConcurrentHashMap<>();
@@ -35,6 +35,7 @@ public final class InMemoryMessageStore implements MessageStore {
         return new StorageRecord(record.offset(), record.key(), record.value());
     }
 
+    @Override
     public AppendResult appendRecord(
             PartitionId partition, byte[] key, byte[] value, Map<String, byte[]> headers, long timestampEpochMillis) {
         PartitionLog log = logs.computeIfAbsent(partition, ignored -> new PartitionLog());
@@ -42,6 +43,7 @@ public final class InMemoryMessageStore implements MessageStore {
         return log.append(messageId, key, value, headers, timestampEpochMillis);
     }
 
+    @Override
     public List<StoredRecord> fetch(PartitionId partition, long offset, int maxRecords) {
         PartitionLog log = logs.get(partition);
         if (log == null || maxRecords <= 0) {
@@ -50,23 +52,25 @@ public final class InMemoryMessageStore implements MessageStore {
         return log.fetch(offset, maxRecords);
     }
 
+    @Override
     public void ensurePartition(PartitionId partition) {
         logs.computeIfAbsent(partition, ignored -> new PartitionLog());
     }
 
+    @Override
     public void removePartition(PartitionId partition) {
         logs.remove(partition);
     }
 
-    public record AppendResult(long messageId, long offset) {}
+    @Override
+    public void flush() {
+        // no-op
+    }
 
-    public record StoredRecord(
-            long messageId,
-            long offset,
-            long timestampEpochMillis,
-            byte[] key,
-            byte[] value,
-            Map<String, byte[]> headers) {}
+    @Override
+    public void close() {
+        logs.clear();
+    }
 
     private static final class PartitionLog {
         private final List<StoredRecord> records = new ArrayList<>();

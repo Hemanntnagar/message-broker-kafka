@@ -2,7 +2,12 @@ package com.javastream.broker;
 
 import com.javastream.partition.PartitionId;
 import com.javastream.partition.PartitionMetadataStore;
+import com.javastream.config.JavaStreamConfig;
+import com.javastream.config.ConfigLoader;
+import com.javastream.storage.BrokerMessageStore;
+import com.javastream.storage.FileMessageStore;
 import com.javastream.storage.InMemoryMessageStore;
+import com.javastream.storage.log.StorageSettings;
 import com.javastream.topic.TopicManager;
 import com.javastream.topic.TopicMetadata;
 import com.javastream.topic.TopicName;
@@ -17,7 +22,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class BrokerServices {
 
     private final TopicManager topicManager;
-    private final InMemoryMessageStore messageStore;
+    private final BrokerMessageStore messageStore;
     private final ConcurrentHashMap<PartitionId, Long> committedOffsets = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<PartitionId, Object> partitionLocks = new ConcurrentHashMap<>();
 
@@ -26,12 +31,59 @@ public final class BrokerServices {
     }
 
     public BrokerServices(int defaultPartitionCount) {
-        this.messageStore = new InMemoryMessageStore();
-        this.topicManager =
-                new TopicManager(defaultPartitionCount, new PartitionMetadataStore(), messageStore);
+        this(new InMemoryMessageStore(), defaultPartitionCount);
     }
 
-    BrokerServices(TopicManager topicManager, InMemoryMessageStore messageStore) {
+    public BrokerServices(JavaStreamConfig config) {
+        this(openMessageStore(config), config.defaultTopicPartitionCount());
+    }
+
+    public static BrokerServices create(JavaStreamConfig config) {
+        return new BrokerServices(config);
+    }
+
+    private static BrokerMessageStore openMessageStore(JavaStreamConfig config) {
+        try {
+            var props = ConfigLoader.loadPropertiesForStorage();
+            StorageSettings storageSettings = StorageSettings.from(config, props);
+            return new FileMessageStore(storageSettings);
+        } catch (Exception e) {
+            throw new com.javastream.exception.ConfigurationException(
+                    "Failed to open durable message store at " + config.dataDirectory(), e);
+        }
+    }
+
+    public BrokerServices(BrokerMessageStore messageStore, int defaultPartitionCount) {
+        this.messageStore = messageStore;
+        this.topicManager =
+                new TopicManager(defaultPartitionCount, new PartitionMetadataStore(), messageStore);
+        if (messageStore instanceof FileMessageStore fileStore) {
+            restoreTopicsFromCatalog(fileStore);
+        }
+    }
+
+    private void restoreTopicsFromCatalog(FileMessageStore fileStore) {
+        for (var entry : fileStore.persistedTopics().entrySet()) {
+            TopicName topic = new TopicName(entry.getKey());
+            int partitions = entry.getValue();
+            try {
+                registerTopic(topic, partitions);
+            } catch (com.javastream.exception.JavaStreamException ignored) {
+                // already registered from concurrent layout discovery
+            }
+            for (int p = 0; p < partitions; p++) {
+                PartitionId id = new PartitionId(topic, p);
+                long end = fileStore.logEndOffset(id);
+                topicManager.metadataStore().recover(id, end);
+            }
+        }
+    }
+
+    public void close() {
+        messageStore.close();
+    }
+
+    BrokerServices(TopicManager topicManager, BrokerMessageStore messageStore) {
         this.topicManager = topicManager;
         this.messageStore = messageStore;
     }
@@ -40,12 +92,15 @@ public final class BrokerServices {
         return topicManager;
     }
 
-    public InMemoryMessageStore messageStore() {
+    public BrokerMessageStore messageStore() {
         return messageStore;
     }
 
     public void registerTopic(TopicName name, int partitionCount) {
         topicManager.createTopic(name, partitionCount);
+        if (messageStore instanceof FileMessageStore fileStore) {
+            fileStore.recordTopic(name, partitionCount);
+        }
     }
 
     public Optional<Integer> partitionCount(TopicName name) {
@@ -66,6 +121,9 @@ public final class BrokerServices {
 
     public void deleteTopic(TopicName name) {
         topicManager.deleteTopic(name);
+        if (messageStore instanceof FileMessageStore fileStore) {
+            fileStore.forgetTopic(name);
+        }
     }
 
     public void acknowledge(TopicName topic, int partition, long offset) {
@@ -77,14 +135,14 @@ public final class BrokerServices {
         return committedOffsets.getOrDefault(partition, -1L);
     }
 
-    public InMemoryMessageStore.AppendResult appendRecord(
+    public BrokerMessageStore.AppendResult appendRecord(
             PartitionId partitionId,
             byte[] key,
             byte[] value,
             java.util.Map<String, byte[]> headers,
             long timestampEpochMillis) {
         synchronized (partitionLock(partitionId)) {
-            InMemoryMessageStore.AppendResult result =
+            BrokerMessageStore.AppendResult result =
                     messageStore.appendRecord(partitionId, key, value, headers, timestampEpochMillis);
             topicManager.recordAppend(partitionId, result.offset());
             return result;

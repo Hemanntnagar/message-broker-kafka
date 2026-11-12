@@ -6,7 +6,7 @@ import com.javastream.partition.Partition;
 import com.javastream.partition.PartitionAssignment;
 import com.javastream.partition.PartitionId;
 import com.javastream.partition.PartitionMetadataStore;
-import com.javastream.storage.InMemoryMessageStore;
+import com.javastream.storage.BrokerMessageStore;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -22,14 +22,14 @@ public final class TopicManager {
 
     private final ConcurrentHashMap<TopicName, Topic> topics = new ConcurrentHashMap<>();
     private final PartitionMetadataStore metadataStore;
-    private final InMemoryMessageStore messageStore;
+    private final BrokerMessageStore messageStore;
     private final PartitionAssignment partitionAssignment;
     private final int defaultPartitionCount;
 
     public TopicManager(
             int defaultPartitionCount,
             PartitionMetadataStore metadataStore,
-            InMemoryMessageStore messageStore) {
+            BrokerMessageStore messageStore) {
         this(
                 defaultPartitionCount,
                 metadataStore,
@@ -40,7 +40,7 @@ public final class TopicManager {
     TopicManager(
             int defaultPartitionCount,
             PartitionMetadataStore metadataStore,
-            InMemoryMessageStore messageStore,
+            BrokerMessageStore messageStore,
             PartitionAssignment partitionAssignment) {
         this.defaultPartitionCount = Preconditions.requirePositive(defaultPartitionCount, "defaultPartitionCount");
         this.metadataStore = metadataStore;

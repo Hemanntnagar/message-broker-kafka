@@ -30,6 +30,17 @@ public final class PartitionMetadataStore {
         }
     }
 
+    /** Restores in-memory stats after durable log recovery (offsets start at 0). */
+    public void recover(PartitionId partitionId, long logEndOffset) {
+        if (logEndOffset < 0) {
+            throw new IllegalArgumentException("logEndOffset must be non-negative");
+        }
+        PartitionStats partitionStats = new PartitionStats(partitionId.index());
+        partitionStats.logEndOffset.set(logEndOffset);
+        partitionStats.recordCount.set(logEndOffset);
+        stats.put(partitionId, partitionStats);
+    }
+
     public long onAppend(PartitionId partitionId, long assignedOffset) {
         PartitionStats partitionStats =
                 stats.computeIfAbsent(partitionId, ignored -> new PartitionStats(partitionId.index()));

@@ -24,6 +24,18 @@ public final class ConfigLoader {
         return load(null);
     }
 
+    /** Merged properties (defaults, optional file, environment) for storage tuning. */
+    public static Properties loadPropertiesForStorage() {
+        Properties props = new Properties();
+        loadDefaults(props);
+        Path file = resolveConfigFile(null);
+        if (file != null) {
+            loadFromFile(props, file);
+        }
+        EnvironmentConfigSource.apply(props);
+        return props;
+    }
+
     public static JavaStreamConfig load(Path optionalConfigFile) {
         Properties props = new Properties();
         loadDefaults(props);

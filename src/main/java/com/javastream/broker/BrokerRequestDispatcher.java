@@ -8,8 +8,8 @@ import com.javastream.protocol.RecordPayloadCodec;
 import com.javastream.protocol.Request;
 import com.javastream.protocol.Response;
 import com.javastream.protocol.StatusCode;
-import com.javastream.storage.InMemoryMessageStore;
-import com.javastream.storage.InMemoryMessageStore.StoredRecord;
+import com.javastream.storage.BrokerMessageStore;
+import com.javastream.storage.BrokerMessageStore.StoredRecord;
 import com.javastream.topic.TopicMetadata;
 import com.javastream.topic.TopicName;
 import org.slf4j.Logger;
@@ -122,7 +122,7 @@ public final class BrokerRequestDispatcher {
         }
         int partition = services.resolvePartition(topic, produce.partitionHint(), produce.key());
         PartitionId partitionId = new PartitionId(topic, partition);
-        InMemoryMessageStore.AppendResult append =
+        BrokerMessageStore.AppendResult append =
                 services.appendRecord(
                         partitionId,
                         produce.key(),
