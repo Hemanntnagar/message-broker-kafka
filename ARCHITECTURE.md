@@ -1,4 +1,4 @@
-# JavaStream Architecture (Phase 0)
+# JavaStream Architecture
 
 ## Goals
 
@@ -34,16 +34,16 @@ partition   leadership     coordinator   ReplicaManager
 │  Wire framing only; delegates to broker services          │
 └───────────────────────────┬─────────────────────────────┘
                             │
-                     (future network I/O)
+                     server.BrokerServer + ClientHandler (Phase 1 TCP)
 ```
 
 ## Module map
 
-| Package | Responsibility | Phase 0 state |
+| Package | Responsibility | Current state |
 |---------|----------------|---------------|
-| `server` | JVM entry, `ServerLifecycle` | `JavaStreamServer` + main |
+| `server` | JVM entry, TCP acceptor | `JavaStreamServer`, `BrokerServer`, `ClientHandler` |
 | `config` | Layered config, env overrides | `ConfigLoader`, `JavaStreamConfig` |
-| `broker` | Node coordinator | `BrokerNode` + `NoOpBrokerNode` |
+| `broker` | Node coordinator | `TcpBrokerNode` (default), `NoOpBrokerNode` (tests) |
 | `protocol` | Encode/decode, dispatch | Interfaces only |
 | `topic` / `partition` | Naming & shard identity | Value types + registry interface |
 | `storage` | Append/read log | Interface only |
@@ -82,9 +82,15 @@ Invalid or missing required resources fail fast with **`ConfigurationException`*
 
 JUnit 5 unit tests for configuration loading, environment key mapping, server lifecycle, and shared validators. Integration and protocol tests arrive with networking and storage.
 
+## Phase 1 networking
+
+- **`BrokerServer`**: `ServerSocket` accept loop on a virtual thread; binds `JavaStreamConfig.listenHost()` / `listenPort()` (default **9092**).
+- **`ClientHandler`**: one virtual thread per connection; length-prefixed frames; socket read timeout **30s**; max request **1 MiB**; empty ACK response until protocol/storage land.
+- Graceful shutdown closes the listening socket and all tracked client sockets.
+
 ## Next phases (not in scope here)
 
-1. TCP acceptor and request pipeline (`protocol` + `server`)
+1. Request pipeline (`protocol` + broker services)
 2. Segment-based `MessageStore`
 3. Topic creation and partition assignment on `BrokerNode`
 4. Replication and cluster coordination

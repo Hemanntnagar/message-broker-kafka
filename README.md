@@ -1,6 +1,8 @@
 # JavaStream
 
-JavaStream is a **Kafka-inspired** distributed message broker built in Java. This repository is **Phase 0**: project scaffolding, configuration, modular packages, and lifecycle entry points—**no wire protocol or storage implementation yet**.
+JavaStream is a **Kafka-inspired** distributed message broker built in Java.
+
+**Phase 1** adds a TCP listener with virtual-threaded client handlers (default port **9092**). Message storage and produce/consume semantics are not implemented yet.
 
 ## Requirements
 
@@ -13,17 +15,39 @@ JavaStream is a **Kafka-inspired** distributed message broker built in Java. Thi
 ./mvnw clean verify
 ```
 
-## Run the broker (Phase 0 stub)
+## Run the broker
+
+Start (listens on `network.listen.host` / `network.listen.port`, default `0.0.0.0:9092`):
 
 ```bash
-mvn -q exec:java -Dexec.mainClass=com.javastream.server.JavaStreamApplication
+./mvnw -q exec:java -Dexec.mainClass=com.javastream.server.JavaStreamApplication
 ```
 
 Or after packaging:
 
 ```bash
-mvn -q package
+./mvnw -q package
 java -jar target/javastream-0.1.0-SNAPSHOT.jar
+```
+
+Stop gracefully with **Ctrl+C** (SIGINT). The JVM shutdown hook calls `JavaStreamServer.stop()`, which closes the `ServerSocket` and active client connections.
+
+### Manual TCP smoke test
+
+Wire format (Phase 1): **4-byte big-endian length** + payload. The server replies with `0` (4-byte length of an empty body).
+
+```bash
+# Example with netcat (send length 5 + "hello")
+printf '\x00\x00\x00\x05hello' | nc 127.0.0.1 9092 | xxd
+# Expect four zero bytes (empty response payload length)
+```
+
+Override bind address/port:
+
+```bash
+export JAVASTREAM_NETWORK_LISTEN_HOST=127.0.0.1
+export JAVASTREAM_NETWORK_LISTEN_PORT=19092
+./mvnw -q exec:java -Dexec.mainClass=com.javastream.server.JavaStreamApplication
 ```
 
 ## Configuration

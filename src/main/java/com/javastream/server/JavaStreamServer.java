@@ -1,7 +1,7 @@
 package com.javastream.server;
 
 import com.javastream.broker.BrokerNode;
-import com.javastream.broker.NoOpBrokerNode;
+import com.javastream.broker.TcpBrokerNode;
 import com.javastream.config.JavaStreamConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,7 +20,7 @@ public final class JavaStreamServer implements ServerLifecycle {
     private final AtomicBoolean running = new AtomicBoolean(false);
 
     public JavaStreamServer(JavaStreamConfig config) {
-        this(config, new NoOpBrokerNode(config));
+        this(config, new TcpBrokerNode(config));
     }
 
     public JavaStreamServer(JavaStreamConfig config, BrokerNode brokerNode) {
