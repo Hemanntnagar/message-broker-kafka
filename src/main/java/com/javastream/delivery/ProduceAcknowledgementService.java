@@ -20,7 +20,10 @@ public final class ProduceAcknowledgementService {
     }
 
     public void awaitAcknowledgement(
-            ProducerAckLevel ackLevel, BrokerMessageStore messageStore, PartitionId partitionId) {
+            ProducerAckLevel ackLevel,
+            BrokerMessageStore messageStore,
+            PartitionId partitionId,
+            long appendedOffset) {
         switch (ackLevel) {
             case ACK_NONE -> {
                 // leader accepted append in memory
@@ -34,8 +37,9 @@ public final class ProduceAcknowledgementService {
                             "ACK_ALL_REPLICAS cannot be satisfied: leader is not in the ISR for "
                                     + partitionId);
                 }
-                // Single-broker clusters treat ISR={local} as satisfied; full multi-broker
-                // replication will extend this check when replication streams land.
+                if (replicaManager instanceof com.javastream.replication.ClusterReplicaManager cluster) {
+                    cluster.awaitThrough(partitionId, appendedOffset, 10_000);
+                }
             }
         }
     }

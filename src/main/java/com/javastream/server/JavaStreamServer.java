@@ -1,6 +1,7 @@
 package com.javastream.server;
 
 import com.javastream.broker.BrokerNode;
+import com.javastream.broker.ClusterBrokerNode;
 import com.javastream.broker.TcpBrokerNode;
 import com.javastream.config.JavaStreamConfig;
 import org.slf4j.Logger;
@@ -20,7 +21,7 @@ public final class JavaStreamServer implements ServerLifecycle {
     private final AtomicBoolean running = new AtomicBoolean(false);
 
     public JavaStreamServer(JavaStreamConfig config) {
-        this(config, new TcpBrokerNode(config));
+        this(config, config.clusterEnabled() ? new ClusterBrokerNode(config) : new TcpBrokerNode(config));
     }
 
     public JavaStreamServer(JavaStreamConfig config, BrokerNode brokerNode) {

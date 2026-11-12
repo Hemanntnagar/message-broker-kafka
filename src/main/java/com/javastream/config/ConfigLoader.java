@@ -93,7 +93,14 @@ public final class ConfigLoader {
                     parseInt(props.getProperty("network.listen.port", "9092"), "network.listen.port"),
                     props.getProperty("storage.data.dir", "./data"),
                     Boolean.parseBoolean(props.getProperty("cluster.enabled", "false")),
-                    parseInt(props.getProperty("topic.default.partition.count", "1"), "topic.default.partition.count"));
+                    parseInt(props.getProperty("topic.default.partition.count", "1"), "topic.default.partition.count"),
+                    parseInt(props.getProperty("cluster.coordinator.id", "0"), "cluster.coordinator.id"),
+                    props.getProperty("cluster.coordinator.host", "127.0.0.1"),
+                    parseInt(props.getProperty("cluster.coordinator.port", "0"), "cluster.coordinator.port"),
+                    parseInt(props.getProperty("network.replication.port", "0"), "network.replication.port"),
+                    parseInt(props.getProperty("cluster.replication.factor", "1"), "cluster.replication.factor"),
+                    parseLong(props.getProperty("cluster.session.timeout.ms", "15000"), "cluster.session.timeout.ms"),
+                    parseLong(props.getProperty("cluster.heartbeat.interval.ms", "2000"), "cluster.heartbeat.interval.ms"));
         } catch (NumberFormatException e) {
             throw new ConfigurationException("Invalid numeric configuration value", e);
         }
@@ -102,5 +109,10 @@ public final class ConfigLoader {
     private static int parseInt(String value, String key) {
         Objects.requireNonNull(value, key);
         return Integer.parseInt(value.trim());
+    }
+
+    private static long parseLong(String value, String key) {
+        Objects.requireNonNull(value, key);
+        return Long.parseLong(value.trim());
     }
 }

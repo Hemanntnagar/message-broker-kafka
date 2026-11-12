@@ -8,7 +8,7 @@ JavaStream exposes delivery semantics through **producer acknowledgement levels*
 |-------|----------|
 | `ACK_NONE` | Record is accepted on the leader; response is sent without waiting for `flush()`. Fastest; weakest durability if the process crashes before pages are written. |
 | `ACK_LEADER` | Record is appended, then the broker applies the configured flush policy before responding. Default for clients. |
-| `ACK_ALL_REPLICAS` | Leader flushes and verifies the partition ISR includes the local broker. On a **single broker** this matches `ACK_LEADER`. Full multi-replica safety requires inter-broker replication (not yet implemented). |
+| `ACK_ALL_REPLICAS` | Leader flushes and waits for assigned followers to replicate the record (cluster mode). On a **single broker** this matches `ACK_LEADER`. See `CLUSTER_REPLICATION.md` for ISR and data-loss boundaries. |
 
 Wire encoding: optional 21-byte trailer on `PRODUCE` (see `PROTOCOL.md`).
 

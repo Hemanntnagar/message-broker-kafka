@@ -87,6 +87,7 @@ public final class BrokerRequestDispatcher {
                     ProtocolConstants.VERSION_1, request.correlationId(), StatusCode.BAD_REQUEST, new byte[0]);
         }
         services.registerTopic(topic, create.partitionCount());
+        services.replicationEngine().ifPresent(engine -> engine.onTopicCreatedLocally(topic, create.partitionCount()));
         return Response.ok(request.correlationId(), new byte[0]);
     }
 
@@ -133,6 +134,11 @@ public final class BrokerRequestDispatcher {
         }
         int partition = services.resolvePartition(topic, produce.partitionHint(), produce.key());
         PartitionId partitionId = new PartitionId(topic, partition);
+        if (services.leadership().isPresent()
+                && !services.leadership().get().isLocalLeader(partitionId, services.brokerId())) {
+            return new Response(
+                    ProtocolConstants.VERSION_1, request.correlationId(), StatusCode.BAD_REQUEST, new byte[0]);
+        }
         ProducerIdempotencyCache idempotency = services.producerIdempotencyCache();
         var duplicate =
                 idempotency.beginIdempotentAppend(produce.producerId(), partitionId, produce.sequenceNumber());
@@ -155,8 +161,22 @@ public final class BrokerRequestDispatcher {
                 produce.sequenceNumber(),
                 append.messageId(),
                 append.offset());
-        services.produceAcknowledgementService()
-                .awaitAcknowledgement(produce.ackLevel(), services.messageStore(), partitionId);
+        services
+                .replicationEngine()
+                .ifPresent(
+                        engine ->
+                                engine.replicateAfterLeaderAppend(
+                                        partitionId,
+                                        append.messageId(),
+                                        append.offset(),
+                                        produce.key(),
+                                        produce.value(),
+                                        produce.headers(),
+                                        System.currentTimeMillis()));
+        services
+                .produceAcknowledgementService()
+                .awaitAcknowledgement(
+                        produce.ackLevel(), services.messageStore(), partitionId, append.offset());
         ack = new RecordPayloadCodec.ProduceResponse(append.messageId(), partition, append.offset());
         return Response.ok(request.correlationId(), RecordPayloadCodec.encodeProduceResponse(ack));
     }

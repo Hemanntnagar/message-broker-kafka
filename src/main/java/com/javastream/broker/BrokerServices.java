@@ -7,6 +7,10 @@ import com.javastream.config.ConfigLoader;
 import com.javastream.delivery.ProduceAcknowledgementService;
 import com.javastream.delivery.ProducerIdempotencyCache;
 import com.javastream.group.ConsumerGroupManager;
+import com.javastream.cluster.ClusterPartitionLeadership;
+import com.javastream.replication.ClusterReplicaManager;
+import com.javastream.replication.ReplicaManager;
+import com.javastream.replication.ReplicationEngine;
 import com.javastream.replication.SingleBrokerReplicaManager;
 import com.javastream.storage.BrokerMessageStore;
 import com.javastream.storage.FileMessageStore;
@@ -32,6 +36,10 @@ public final class BrokerServices {
     private final ConsumerGroupManager consumerGroupManager;
     private final ProducerIdempotencyCache producerIdempotencyCache = new ProducerIdempotencyCache();
     private final ProduceAcknowledgementService produceAcknowledgementService;
+    private final ReplicaManager replicaManager;
+    private final ClusterPartitionLeadership leadership;
+    private ReplicationEngine replicationEngine;
+    private final int brokerId;
     private final ConcurrentHashMap<PartitionId, Long> committedOffsets = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<PartitionId, Object> partitionLocks = new ConcurrentHashMap<>();
 
@@ -67,13 +75,33 @@ public final class BrokerServices {
     }
 
     public BrokerServices(BrokerMessageStore messageStore, int defaultPartitionCount, int brokerId) {
+        this(
+                messageStore,
+                defaultPartitionCount,
+                brokerId,
+                new SingleBrokerReplicaManager(brokerId),
+                null,
+                null);
+    }
+
+    public BrokerServices(
+            BrokerMessageStore messageStore,
+            int defaultPartitionCount,
+            int brokerId,
+            ReplicaManager replicaManager,
+            ClusterPartitionLeadership leadership,
+            ReplicationEngine replicationEngine) {
         this.messageStore = messageStore;
+        this.brokerId = brokerId;
+        this.replicaManager = replicaManager;
+        this.leadership = leadership;
+        this.replicationEngine = replicationEngine;
         this.topicManager =
                 new TopicManager(defaultPartitionCount, new PartitionMetadataStore(), messageStore);
         this.consumerGroupManager =
                 new ConsumerGroupManager(this::partitionCount, consumerOffsetCatalogPath(messageStore));
         this.produceAcknowledgementService =
-                new ProduceAcknowledgementService(new SingleBrokerReplicaManager(brokerId), brokerId);
+                new ProduceAcknowledgementService(replicaManager, brokerId);
         if (messageStore instanceof FileMessageStore fileStore) {
             restoreTopicsFromCatalog(fileStore);
         }
@@ -118,8 +146,35 @@ public final class BrokerServices {
         this.topicManager = topicManager;
         this.messageStore = messageStore;
         this.consumerGroupManager = consumerGroupManager;
+        this.brokerId = brokerId;
+        this.replicaManager = new SingleBrokerReplicaManager(brokerId);
+        this.leadership = null;
+        this.replicationEngine = null;
         this.produceAcknowledgementService =
-                new ProduceAcknowledgementService(new SingleBrokerReplicaManager(brokerId), brokerId);
+                new ProduceAcknowledgementService(replicaManager, brokerId);
+    }
+
+    public void attachReplicationEngine(ReplicationEngine replicationEngine) {
+        this.replicationEngine = replicationEngine;
+    }
+
+    public int brokerId() {
+        return brokerId;
+    }
+
+    public Optional<ClusterPartitionLeadership> leadership() {
+        return Optional.ofNullable(leadership);
+    }
+
+    public Optional<ReplicationEngine> replicationEngine() {
+        return Optional.ofNullable(replicationEngine);
+    }
+
+    public Optional<ClusterReplicaManager> clusterReplicaManager() {
+        if (replicaManager instanceof ClusterReplicaManager cluster) {
+            return Optional.of(cluster);
+        }
+        return Optional.empty();
     }
 
     private static Path consumerOffsetCatalogPath(BrokerMessageStore messageStore) {
