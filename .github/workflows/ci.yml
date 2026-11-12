@@ -21,6 +21,10 @@ jobs:
       - name: Build and test
         run: ./mvnw -B clean verify
 
+      - name: Static analysis (SpotBugs)
+        continue-on-error: true
+        run: ./mvnw -B -DskipSpotbugs=false spotbugs:check
+
       - name: Upload Surefire reports
         if: always()
         uses: actions/upload-artifact@v4
